@@ -29,15 +29,28 @@ var raw_right_x: float = 0.0
 var raw_right_y: float = 0.0
 
 var gamepad_connected: bool = false
+var gamepad_device: int = -1
+var gamepad_name: String = ""
 
 func _ready() -> void:
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
 	# Check if any gamepad is already connected
-	var joypads := Input.get_connected_joypads()
-	gamepad_connected = joypads.size() > 0
+	_detect_gamepad()
 
-func _on_joy_connection_changed(_device: int, connected: bool) -> void:
-	gamepad_connected = connected or Input.get_connected_joypads().size() > 0
+func _on_joy_connection_changed(_device: int, _connected: bool) -> void:
+	_detect_gamepad()
+
+func _detect_gamepad() -> void:
+	var joypads := Input.get_connected_joypads()
+	if joypads.size() > 0:
+		gamepad_device = joypads[0]
+		gamepad_connected = true
+		gamepad_name = Input.get_joy_name(gamepad_device)
+		print("Gamepad connected: ", gamepad_name, " (device ", gamepad_device, ")")
+	else:
+		gamepad_device = -1
+		gamepad_connected = false
+		gamepad_name = ""
 
 func _input(event: InputEvent) -> void:
 	# One-shot events from action presses
@@ -66,11 +79,11 @@ func poll() -> void:
 
 func _poll_gamepad() -> void:
 	# Mode 2: Left stick = throttle + yaw, Right stick = pitch + roll
-	# Godot axes: 0=LeftX, 1=LeftY, 2=RightX, 3=RightY
-	raw_left_x = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)
-	raw_left_y = Input.get_joy_axis(0, JOY_AXIS_LEFT_Y)
-	raw_right_x = Input.get_joy_axis(0, JOY_AXIS_RIGHT_X)
-	raw_right_y = Input.get_joy_axis(0, JOY_AXIS_RIGHT_Y)
+	var dev := gamepad_device
+	raw_left_x = Input.get_joy_axis(dev, JOY_AXIS_LEFT_X)
+	raw_left_y = Input.get_joy_axis(dev, JOY_AXIS_LEFT_Y)
+	raw_right_x = Input.get_joy_axis(dev, JOY_AXIS_RIGHT_X)
+	raw_right_y = Input.get_joy_axis(dev, JOY_AXIS_RIGHT_Y)
 
 	throttle = _apply_deadzone(-raw_left_y)   # up = climb
 	yaw = _apply_expo(_apply_deadzone(-raw_left_x))
