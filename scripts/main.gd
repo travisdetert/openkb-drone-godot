@@ -7,9 +7,20 @@ var hud_layer: CanvasLayer
 var environment_builder: EnvironmentBuilder
 var drone_overlays: DroneOverlays
 var udp_telemetry: UDPTelemetry
+var crash_effects: CrashEffects
 
 var _hud_timer: float = 0.0
 var _config: DroneConfig
+
+# Engineering state
+var _flight_timer: float = 0.0
+var _max_altitude: float = 0.0
+var _max_speed: float = 0.0
+var _battery_mah_consumed: float = 0.0
+
+const BATTERY_CAPACITY_MAH := 1500.0
+const MOTOR_IDLE_AMPS := 0.5
+const MOTOR_MAX_AMPS := 15.0
 
 func _ready() -> void:
 	# Set physics tick rate
@@ -58,10 +69,19 @@ func _ready() -> void:
 	add_child(drone_overlays)
 	drone_overlays.setup_thrust_lines(_config.motor_count)
 
+	# Crash effects
+	crash_effects = CrashEffects.new()
+	crash_effects.name = "CrashEffects"
+	add_child(crash_effects)
+
 	# UDP telemetry for ESP32
 	udp_telemetry = UDPTelemetry.new()
 	udp_telemetry.name = "UDPTelemetry"
 	add_child(udp_telemetry)
+
+	# Crash system signals
+	drone_controller.drone_crashed.connect(_on_drone_crashed)
+	drone_controller.drone_reset.connect(_on_drone_reset)
 
 func _setup_world_environment() -> void:
 	var we := WorldEnvironment.new()
@@ -132,17 +152,54 @@ func _physics_process(dt: float) -> void:
 	drone_controller.update_physics(dt, commands)
 
 	# Send telemetry to ESP32
-	udp_telemetry.send_telemetry(drone_controller.physics, _config, drone_controller.armed, dt)
+	udp_telemetry.send_telemetry(drone_controller.physics, _config, drone_controller.activated, dt)
+
+	# Proximity data (cached once per tick)
+	var proximity_data := drone_controller.get_proximity_data()
 
 	# Overlays
-	drone_overlays.update_overlays(drone_controller.physics, _config)
+	drone_overlays.update_overlays(drone_controller.physics, _config, proximity_data)
 
 	# Camera
 	camera_ctrl.set_target(
 		drone_controller.physics.position,
 		drone_controller.physics.drone_quaternion
 	)
+	camera_ctrl.set_speed_data(
+		drone_controller.physics.velocity.length(),
+		_config.get_speed().max_speed
+	)
 	camera_ctrl.update_camera(dt)
+
+	# Engineering state tracking
+	_update_engineering_state(dt)
+
+func _update_engineering_state(dt: float) -> void:
+	if not drone_controller.activated:
+		return
+
+	var physics := drone_controller.physics
+
+	# Flight timer
+	_flight_timer += dt
+
+	# Max altitude
+	if physics.position.y > _max_altitude:
+		_max_altitude = physics.position.y
+
+	# Max speed
+	var speed := physics.get_horizontal_speed()
+	if speed > _max_speed:
+		_max_speed = speed
+
+	# Battery consumption: each motor draws idle + load*rpm_frac
+	var total_amps := 0.0
+	var rpms := physics.rotor_physics.motor_rpms
+	for i in range(rpms.size()):
+		var rpm_frac := rpms[i] / _config.max_rpm
+		total_amps += MOTOR_IDLE_AMPS + MOTOR_MAX_AMPS * rpm_frac
+	# mAh = amps * hours * 1000 = amps * (dt/3600) * 1000
+	_battery_mah_consumed += total_amps * (dt / 3.6)
 
 func _process(dt: float) -> void:
 	# HUD throttled to ~20fps
@@ -186,19 +243,44 @@ func _update_hud() -> void:
 	elif input_manager.gamepad_connected:
 		input_source = "GAMEPAD"
 
+	var cam_tilt := -1.0
+	if camera_ctrl.mode == CameraController3D.CameraMode.FPV:
+		cam_tilt = camera_ctrl.get_fpv_tilt_degrees()
 	hud_layer.update_status(
-		drone_controller.armed,
+		drone_controller.activated,
 		camera_ctrl.get_mode_name(),
 		input_source,
-		_config.get_speed().profile_name
+		_config.get_speed().profile_name,
+		cam_tilt
 	)
 
+	# Proximity warning
+	var prox_data := drone_controller.get_proximity_data()
+	hud_layer.update_proximity(prox_data.get("near", false))
+
+	# Engineering panel
+	var battery_pct := maxf(0.0, (BATTERY_CAPACITY_MAH - _battery_mah_consumed) / BATTERY_CAPACITY_MAH * 100.0)
+	hud_layer.engineering_panel.update_engineering({
+		"flight_time": _flight_timer,
+		"pos_x": physics.position.x,
+		"pos_z": physics.position.z,
+		"vspeed_error": physics.last_vspeed_error,
+		"max_alt": _max_altitude,
+		"max_speed": _max_speed,
+		"battery_pct": battery_pct,
+		"g_force": physics.g_force,
+		"fps": Engine.get_frames_per_second(),
+	})
+
 func _handle_events() -> void:
-	if input_manager.consume_event("arm_toggle"):
-		drone_controller.arm_toggle()
+	if input_manager.consume_event("activate_toggle"):
+		drone_controller.activate_toggle()
 
 	if input_manager.consume_event("reset_position"):
 		drone_controller.reset_drone()
+		crash_effects.clear_latest_ghost()
+		_reset_engineering_state()
+		hud_layer.hide_crash()
 
 	if input_manager.consume_event("toggle_camera"):
 		camera_ctrl.cycle_mode()
@@ -217,6 +299,30 @@ func _handle_events() -> void:
 
 	if input_manager.consume_event("toggle_config"):
 		hud_layer.toggle_config()
+
+func _reset_engineering_state() -> void:
+	_flight_timer = 0.0
+	_max_altitude = 0.0
+	_max_speed = 0.0
+	_battery_mah_consumed = 0.0
+
+func _on_drone_crashed(speed: float, obstacle_type: String) -> void:
+	camera_ctrl.trigger_crash_flash()
+	hud_layer.show_crash(speed, obstacle_type)
+	hud_layer.update_crash_count(drone_controller.crash_count)
+
+	# Crash effects
+	var pos := drone_controller.crash_position
+	var quat := drone_controller.crash_quaternion
+	var vel := drone_controller.crash_velocity
+	crash_effects.spawn_debris(pos, vel, quat)
+	crash_effects.spawn_ghost(pos, quat, _config)
+	crash_effects.spawn_smoke_marker(pos)
+
+func _on_drone_reset() -> void:
+	hud_layer.hide_crash()
+	crash_effects.clear_latest_ghost()
+	_reset_engineering_state()
 
 func _on_config_changed(new_config: DroneConfig) -> void:
 	_config = new_config
