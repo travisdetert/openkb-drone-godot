@@ -111,7 +111,7 @@ func _make_separator() -> Label:
 	sep.add_theme_color_override("font_color", Color(0.4, 0.4, 0.4))
 	return sep
 
-func update_status(armed: bool, camera_mode: String, input_connected: bool, speed_name: String) -> void:
+func update_status(armed: bool, camera_mode: String, input_source: String, speed_name: String) -> void:
 	if status_armed_label:
 		status_armed_label.text = "ARMED" if armed else "DISARMED"
 		status_armed_label.add_theme_color_override("font_color",
@@ -119,7 +119,12 @@ func update_status(armed: bool, camera_mode: String, input_connected: bool, spee
 	if status_camera_label:
 		status_camera_label.text = camera_mode
 	if status_input_label:
-		status_input_label.text = "GAMEPAD" if input_connected else "KB"
+		status_input_label.text = input_source
+		# Highlight ESP32 input in cyan
+		if input_source == "ESP32":
+			status_input_label.add_theme_color_override("font_color", Color(0.0, 0.8, 1.0))
+		else:
+			status_input_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
 	if status_speed_label:
 		status_speed_label.text = speed_name.to_upper()
 

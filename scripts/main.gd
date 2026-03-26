@@ -5,6 +5,8 @@ var input_manager: InputManager
 var camera_ctrl: CameraController3D
 var hud_layer: CanvasLayer
 var environment_builder: EnvironmentBuilder
+var drone_overlays: DroneOverlays
+var udp_telemetry: UDPTelemetry
 
 var _hud_timer: float = 0.0
 var _config: DroneConfig
@@ -49,6 +51,17 @@ func _ready() -> void:
 
 	# Set initial motor count on HUD
 	hud_layer.motor_panel.set_motor_count(_config.motor_count)
+
+	# Dev overlays (shadow, thrust lines, velocity vector, etc.)
+	drone_overlays = DroneOverlays.new()
+	drone_overlays.name = "DroneOverlays"
+	add_child(drone_overlays)
+	drone_overlays.setup_thrust_lines(_config.motor_count)
+
+	# UDP telemetry for ESP32
+	udp_telemetry = UDPTelemetry.new()
+	udp_telemetry.name = "UDPTelemetry"
+	add_child(udp_telemetry)
 
 func _setup_world_environment() -> void:
 	var we := WorldEnvironment.new()
@@ -106,9 +119,23 @@ func _physics_process(dt: float) -> void:
 	input_manager.poll()
 	_handle_events()
 
-	# Physics
-	var commands := input_manager.get_commands()
+	# Check for external ESP32 commands via UDP
+	udp_telemetry.poll_commands()
+	udp_telemetry.check_timeout()
+
+	# Physics — use ESP32 commands if available, otherwise gamepad/keyboard
+	var commands: Dictionary
+	if udp_telemetry.has_external_commands:
+		commands = udp_telemetry.get_external_commands()
+	else:
+		commands = input_manager.get_commands()
 	drone_controller.update_physics(dt, commands)
+
+	# Send telemetry to ESP32
+	udp_telemetry.send_telemetry(drone_controller.physics, _config, drone_controller.armed, dt)
+
+	# Overlays
+	drone_overlays.update_overlays(drone_controller.physics, _config)
 
 	# Camera
 	camera_ctrl.set_target(
@@ -153,10 +180,16 @@ func _update_hud() -> void:
 		input_manager.get_commands()
 	)
 
+	var input_source := "KB"
+	if udp_telemetry.has_external_commands:
+		input_source = "ESP32"
+	elif input_manager.gamepad_connected:
+		input_source = "GAMEPAD"
+
 	hud_layer.update_status(
 		drone_controller.armed,
 		camera_ctrl.get_mode_name(),
-		input_manager.gamepad_connected,
+		input_source,
 		_config.get_speed().profile_name
 	)
 
@@ -189,3 +222,4 @@ func _on_config_changed(new_config: DroneConfig) -> void:
 	_config = new_config
 	drone_controller.rebuild(new_config)
 	hud_layer.motor_panel.set_motor_count(new_config.motor_count)
+	drone_overlays.setup_thrust_lines(new_config.motor_count)
