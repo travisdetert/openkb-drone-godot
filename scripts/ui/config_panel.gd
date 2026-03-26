@@ -145,7 +145,7 @@ func _build() -> void:
 	# Help text
 	vbox.add_child(_make_section_label("KEYBOARD"))
 	var help := Label.new()
-	help.text = "SPACE/SHIFT - Throttle\nWASD/Arrows - Pitch/Roll\nQ/E - Yaw\nENTER - Arm/Disarm\nR - Reset\nC - Camera mode\n1/2 - Preset cycle\n3/4 - Blades -/+\nTAB - Toggle config"
+	help.text = "SPACE/SHIFT - Throttle\nWASD/Arrows - Pitch/Roll\nQ/E - Yaw\nENTER - Activate/Standby\nR - Reset\nC - Camera mode\n1/2 - Preset cycle\n3/4 - Blades -/+\nTAB - Toggle config"
 	help.add_theme_font_size_override("font_size", 10)
 	help.add_theme_color_override("font_color", Color(0.4, 0.4, 0.4))
 	vbox.add_child(help)

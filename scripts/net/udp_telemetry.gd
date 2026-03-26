@@ -21,7 +21,7 @@ var ext_throttle: float = 0.0
 var ext_yaw: float = 0.0
 var ext_pitch: float = 0.0
 var ext_roll: float = 0.0
-var ext_arm: bool = false
+var ext_activate: bool = false
 var _last_ext_time: float = 0.0
 
 func _ready() -> void:
@@ -40,7 +40,7 @@ func _ready() -> void:
 
 	print("UDP telemetry: broadcasting on port ", TELEMETRY_PORT)
 
-func send_telemetry(physics: DronePhysics, config: DroneConfig, armed: bool, dt: float) -> void:
+func send_telemetry(physics: DronePhysics, config: DroneConfig, active: bool, dt: float) -> void:
 	if not _enabled:
 		return
 
@@ -62,7 +62,7 @@ func send_telemetry(physics: DronePhysics, config: DroneConfig, armed: bool, dt:
 		"att": [snapped(euler.x, 0.1), snapped(euler.y, 0.1), snapped(euler.z, 0.1)],
 		"hdg": snapped(physics.get_heading(), 0.1),
 		"spd": snapped(physics.get_horizontal_speed(), 0.01),
-		"armed": armed,
+		"active": active,
 		"preset": config.config_name,
 		"motors": [],
 	}
@@ -93,8 +93,8 @@ func poll_commands() -> void:
 			ext_pitch = clampf(float(data["pitch"]), -1.0, 1.0)
 		if data.has("roll"):
 			ext_roll = clampf(float(data["roll"]), -1.0, 1.0)
-		if data.has("arm"):
-			ext_arm = bool(data["arm"])
+		if data.has("activate"):
+			ext_activate = bool(data["activate"])
 
 		has_external_commands = true
 		_last_ext_time = Time.get_ticks_msec() / 1000.0

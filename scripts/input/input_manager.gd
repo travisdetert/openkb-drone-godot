@@ -5,6 +5,7 @@ const DEADZONE := 0.08
 const EXPO := 0.3
 const KB_AXIS_STRENGTH := 0.6
 const KB_THROTTLE_STRENGTH := 0.7
+const KB_RAMP_RATE := 6.67  # ~150ms to reach target (units/s)
 
 # Flight commands
 var throttle: float = 0.0
@@ -12,8 +13,14 @@ var yaw: float = 0.0
 var pitch: float = 0.0
 var roll: float = 0.0
 
+# Keyboard ramp state
+var _kb_throttle: float = 0.0
+var _kb_yaw: float = 0.0
+var _kb_pitch: float = 0.0
+var _kb_roll: float = 0.0
+
 # One-shot events (consumed after reading)
-var arm_toggle: bool = false
+var activate_toggle: bool = false
 var reset_position: bool = false
 var toggle_camera: bool = false
 var preset_up: bool = false
@@ -54,8 +61,8 @@ func _detect_gamepad() -> void:
 
 func _input(event: InputEvent) -> void:
 	# One-shot events from action presses
-	if event.is_action_pressed("arm_toggle"):
-		arm_toggle = true
+	if event.is_action_pressed("activate_toggle"):
+		activate_toggle = true
 	if event.is_action_pressed("reset_position"):
 		reset_position = true
 	if event.is_action_pressed("toggle_camera"):
@@ -91,50 +98,65 @@ func _poll_gamepad() -> void:
 	roll = _apply_expo(_apply_deadzone(raw_right_x))
 
 func _poll_keyboard() -> void:
+	var dt := get_physics_process_delta_time()
+
 	raw_left_x = 0.0
 	raw_left_y = 0.0
 	raw_right_x = 0.0
 	raw_right_y = 0.0
 
-	# Throttle: Space = climb, Shift = descend
-	throttle = 0.0
+	# Compute targets from key state
+	var thr_target := 0.0
 	if Input.is_action_pressed("throttle_up"):
-		throttle = KB_THROTTLE_STRENGTH
+		thr_target = KB_THROTTLE_STRENGTH
 	if Input.is_action_pressed("throttle_down"):
-		throttle = -KB_THROTTLE_STRENGTH
+		thr_target = -KB_THROTTLE_STRENGTH
 
-	# Pitch: W = forward (-), S = back (+)
-	pitch = 0.0
+	var pitch_target := 0.0
 	if Input.is_action_pressed("pitch_forward"):
-		pitch = -KB_AXIS_STRENGTH
+		pitch_target = KB_AXIS_STRENGTH
 	if Input.is_action_pressed("pitch_back"):
-		pitch = KB_AXIS_STRENGTH
+		pitch_target = -KB_AXIS_STRENGTH
 
-	# Roll: A = left (-), D = right (+)
-	roll = 0.0
+	var roll_target := 0.0
 	if Input.is_action_pressed("roll_right"):
-		roll = KB_AXIS_STRENGTH
+		roll_target = KB_AXIS_STRENGTH
 	if Input.is_action_pressed("roll_left"):
-		roll = -KB_AXIS_STRENGTH
+		roll_target = -KB_AXIS_STRENGTH
 
-	# Yaw: Q = left/CCW (-), E = right/CW (+)
-	yaw = 0.0
+	var yaw_target := 0.0
 	if Input.is_action_pressed("yaw_left"):
-		yaw = -KB_AXIS_STRENGTH
+		yaw_target = KB_AXIS_STRENGTH
 	if Input.is_action_pressed("yaw_right"):
-		yaw = KB_AXIS_STRENGTH
+		yaw_target = -KB_AXIS_STRENGTH
+
+	# Ramp toward targets
+	_kb_throttle = _ramp_axis(_kb_throttle, thr_target, dt)
+	_kb_pitch = _ramp_axis(_kb_pitch, pitch_target, dt)
+	_kb_roll = _ramp_axis(_kb_roll, roll_target, dt)
+	_kb_yaw = _ramp_axis(_kb_yaw, yaw_target, dt)
+
+	throttle = _kb_throttle
+	pitch = _kb_pitch
+	roll = _kb_roll
+	yaw = _kb_yaw
 
 	# Set raw values for keyboard stick display
-	raw_left_x = -yaw / KB_AXIS_STRENGTH if yaw != 0 else 0.0
-	raw_left_y = -throttle / KB_THROTTLE_STRENGTH if throttle != 0 else 0.0
-	raw_right_x = roll / KB_AXIS_STRENGTH if roll != 0 else 0.0
-	raw_right_y = -pitch / KB_AXIS_STRENGTH if pitch != 0 else 0.0
+	raw_left_x = -yaw / KB_AXIS_STRENGTH if absf(yaw) > 0.01 else 0.0
+	raw_left_y = -throttle / KB_THROTTLE_STRENGTH if absf(throttle) > 0.01 else 0.0
+	raw_right_x = roll / KB_AXIS_STRENGTH if absf(roll) > 0.01 else 0.0
+	raw_right_y = -pitch / KB_AXIS_STRENGTH if absf(pitch) > 0.01 else 0.0
+
+func _ramp_axis(current: float, target: float, dt: float) -> float:
+	if absf(target - current) < 0.01:
+		return target
+	return move_toward(current, target, KB_RAMP_RATE * dt)
 
 func consume_event(event_name: String) -> bool:
 	match event_name:
-		"arm_toggle":
-			if arm_toggle:
-				arm_toggle = false
+		"activate_toggle":
+			if activate_toggle:
+				activate_toggle = false
 				return true
 		"reset_position":
 			if reset_position:
