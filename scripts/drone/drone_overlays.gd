@@ -16,12 +16,20 @@ var _thrust_mat_low: StandardMaterial3D
 var _thrust_mat_mid: StandardMaterial3D
 var _thrust_mat_high: StandardMaterial3D
 var _altitude_rings: Array[MeshInstance3D] = []
+var _proximity_ring: MeshInstance3D
+var _proximity_ring_mat: StandardMaterial3D
+
+const PROXIMITY_RING_RADIUS := 1.8
+const PROXIMITY_RING_SEGMENTS := 32
+const PROXIMITY_FAR_DIST := 8.0
+const PROXIMITY_CLOSE_DIST := 1.5
 
 func _ready() -> void:
 	_build_shadow()
 	_build_heading_arrow()
 	_build_velocity_arrow()
 	_build_altitude_markers()
+	_build_proximity_ring()
 
 func _build_shadow() -> void:
 	# Dark circle projected on ground below drone
@@ -115,6 +123,58 @@ func _build_altitude_markers() -> void:
 		add_child(mi)
 		_altitude_rings.append(mi)
 
+func _build_proximity_ring() -> void:
+	_proximity_ring_mat = StandardMaterial3D.new()
+	_proximity_ring_mat.albedo_color = Color(0.0, 1.0, 0.0, 0.1)
+	_proximity_ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_proximity_ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_proximity_ring_mat.no_depth_test = true
+
+	var im := ImmediateMesh.new()
+	var inner_r := PROXIMITY_RING_RADIUS - 0.15
+	var outer_r := PROXIMITY_RING_RADIUS + 0.15
+
+	im.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP, _proximity_ring_mat)
+	for i in range(PROXIMITY_RING_SEGMENTS + 1):
+		var angle := (float(i) / PROXIMITY_RING_SEGMENTS) * TAU
+		var cos_a := cos(angle)
+		var sin_a := sin(angle)
+		im.surface_add_vertex(Vector3(inner_r * cos_a, 0, inner_r * sin_a))
+		im.surface_add_vertex(Vector3(outer_r * cos_a, 0, outer_r * sin_a))
+	im.surface_end()
+
+	_proximity_ring = MeshInstance3D.new()
+	_proximity_ring.mesh = im
+	_proximity_ring.name = "ProximityRing"
+	_proximity_ring.visible = false
+	add_child(_proximity_ring)
+
+func _update_proximity_ring(pos: Vector3, proximity_data: Dictionary) -> void:
+	var is_near: bool = proximity_data.get("near", false)
+	if not is_near:
+		_proximity_ring.visible = false
+		return
+
+	_proximity_ring.visible = true
+	_proximity_ring.position = Vector3(pos.x, 0.07, pos.z)
+
+	var dist: float = proximity_data.get("distance", PROXIMITY_FAR_DIST)
+	# Normalize distance: 0.0 = at CLOSE_DIST, 1.0 = at FAR_DIST
+	var t := clampf((dist - PROXIMITY_CLOSE_DIST) / (PROXIMITY_FAR_DIST - PROXIMITY_CLOSE_DIST), 0.0, 1.0)
+
+	# Color gradient: red (close) -> yellow (mid) -> green (far)
+	var color: Color
+	if t < 0.5:
+		# red -> yellow
+		color = Color(1.0, t * 2.0, 0.0)
+	else:
+		# yellow -> green
+		color = Color(1.0 - (t - 0.5) * 2.0, 1.0, 0.0)
+
+	# Alpha ramps up as obstacle gets closer: 0.1 (far) -> 0.7 (close)
+	color.a = lerpf(0.7, 0.1, t)
+	_proximity_ring_mat.albedo_color = color
+
 func setup_thrust_lines(motor_count: int) -> void:
 	# Remove old
 	for line in _thrust_lines:
@@ -152,7 +212,7 @@ func setup_thrust_lines(motor_count: int) -> void:
 		add_child(mi)
 		_thrust_lines.append(mi)
 
-func update_overlays(physics: DronePhysics, config: DroneConfig) -> void:
+func update_overlays(physics: DronePhysics, config: DroneConfig, proximity_data: Dictionary = {}) -> void:
 	var pos := physics.position
 	var quat := physics.drone_quaternion
 	var vel := physics.velocity
@@ -223,3 +283,7 @@ func update_overlays(physics: DronePhysics, config: DroneConfig) -> void:
 				mesh.material = _thrust_mat_high
 		else:
 			_thrust_lines[i].visible = false
+
+	# --- Proximity ring ---
+	if not proximity_data.is_empty():
+		_update_proximity_ring(pos, proximity_data)
