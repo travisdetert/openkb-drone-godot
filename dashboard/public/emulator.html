@@ -1,0 +1,1274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Firmware Emulator — OpenKB Drone</title>
+<style>
+  :root {
+    --bg: #1a1a2e; --panel: #16213e; --border: #0f3460;
+    --text: #e0e0e0; --dim: #888; --accent: #00d4ff;
+    --green: #00e676; --red: #ff5252; --orange: #ffab40; --yellow: #ffff00;
+    --m0: #ff6b6b; --m1: #4ecdc4; --m2: #45b7d1; --m3: #96ceb4;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'SF Mono','Fira Code','Cascadia Code',monospace;
+    background: var(--bg); color: var(--text); font-size: 12px;
+    overflow-x: hidden;
+  }
+
+  /* ── Header ──────────────────────────────────────── */
+  .hdr {
+    display:flex; align-items:center; gap:12px;
+    padding:8px 14px; background:var(--panel); border-bottom:1px solid var(--border);
+  }
+  .hdr h1 { font-size:13px; color:var(--accent); flex-shrink:0; }
+  .hdr .sep { width:1px; height:18px; background:var(--border); }
+  .hdr-stats { display:flex; gap:16px; font-size:11px; color:var(--dim); margin-left:auto; }
+  .hdr-stats .v { color:var(--text); font-weight:600; }
+  .btn {
+    background:var(--border); color:var(--text); border:none;
+    padding:4px 12px; border-radius:3px; cursor:pointer;
+    font-family:inherit; font-size:11px; font-weight:600;
+  }
+  .btn:hover { background:var(--accent); color:var(--bg); }
+  .btn.armed { background:var(--green); color:var(--bg); }
+  .btn.danger { background:var(--red); color:#fff; }
+  a.nav { color:var(--accent); text-decoration:none; font-size:11px; }
+  a.nav:hover { text-decoration:underline; }
+
+  /* ── Layout ──────────────────────────────────────── */
+  .main {
+    display:grid;
+    grid-template-columns: 280px 1fr 260px;
+    gap:10px; padding:10px;
+    max-width:1500px; margin:0 auto;
+    min-height: calc(100vh - 40px);
+  }
+  @media(max-width:1100px) { .main { grid-template-columns:1fr 1fr; } }
+  @media(max-width:700px) { .main { grid-template-columns:1fr; } }
+
+  /* ── Panels ──────────────────────────────────────── */
+  .panel {
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:5px; padding:10px; overflow:hidden;
+  }
+  .panel h2 {
+    font-size:10px; text-transform:uppercase; letter-spacing:1px;
+    color:var(--dim); margin-bottom:8px; padding-bottom:5px;
+    border-bottom:1px solid var(--border);
+  }
+
+  /* ── Component cards ─────────────────────────────── */
+  .hw-card {
+    background:var(--bg); border:1px solid var(--border); border-radius:4px;
+    padding:8px; margin-bottom:8px;
+  }
+  .hw-card:last-child { margin-bottom:0; }
+  .hw-card .chip {
+    display:inline-block; font-size:9px; padding:1px 5px;
+    border-radius:2px; margin-left:6px; font-weight:600;
+  }
+  .hw-card .chip.i2c { background:#4a148c; color:#ce93d8; }
+  .hw-card .chip.pwm { background:#1b5e20; color:#a5d6a7; }
+  .hw-card .chip.wifi { background:#0d47a1; color:#90caf9; }
+  .hw-card .chip.power { background:#bf360c; color:#ffab91; }
+  .hw-card .chip.gpio { background:#33691e; color:#c5e1a5; }
+  .hw-card h3 {
+    font-size:11px; color:var(--accent); margin-bottom:5px;
+    display:flex; align-items:center;
+  }
+  .hw-card .row {
+    display:flex; justify-content:space-between;
+    padding:2px 0; font-size:11px;
+  }
+  .hw-card .row .lbl { color:var(--dim); }
+  .hw-card .row .val { font-weight:600; color:var(--text); }
+  .hw-card .row .val.warn { color:var(--orange); }
+  .hw-card .row .val.ok { color:var(--green); }
+  .hw-card .row .val.err { color:var(--red); }
+
+  /* ── Signal flow arrow between cards ─────────────── */
+  .flow-arrow {
+    text-align:center; color:var(--dim); font-size:10px;
+    padding:2px 0; letter-spacing:2px;
+  }
+  .flow-arrow.active { color:var(--accent); }
+
+  /* ── Middle column ───────────────────────────────── */
+  .mid { display:flex; flex-direction:column; gap:10px; }
+
+  /* ── Drone top-down view ─────────────────────────── */
+  .drone-canvas-wrap {
+    display:flex; justify-content:center; align-items:center;
+    min-height:240px;
+  }
+  #droneCanvas { border-radius:4px; }
+
+  /* ── Pipeline strip ──────────────────────────────── */
+  .pipeline {
+    display:grid; grid-template-columns:repeat(5,1fr); gap:6px;
+  }
+  .pipe-block {
+    background:var(--bg); border:1px solid var(--border); border-radius:4px;
+    padding:6px; text-align:center; position:relative;
+  }
+  .pipe-block h4 {
+    font-size:9px; text-transform:uppercase; color:var(--dim);
+    margin-bottom:4px; letter-spacing:0.5px;
+  }
+  .pipe-block .pv { font-size:13px; font-weight:700; color:var(--accent); }
+  .pipe-block .ps { font-size:10px; color:var(--dim); margin-top:2px; }
+  .pipe-block::after {
+    content:''; position:absolute; right:-5px; top:50%;
+    transform:translateY(-50%);
+    width:0; height:0;
+    border-top:4px solid transparent; border-bottom:4px solid transparent;
+    border-left:4px solid var(--border);
+  }
+  .pipe-block:last-child::after { display:none; }
+
+  /* ── Right column ────────────────────────────────── */
+  .right { display:flex; flex-direction:column; gap:10px; }
+
+  /* ── Joystick ────────────────────────────────────── */
+  .stick-row {
+    display:grid; grid-template-columns:1fr 1fr; gap:8px;
+  }
+  .stick-area {
+    background:var(--bg); border:1px solid var(--border); border-radius:50%;
+    width:100px; height:100px; position:relative; margin:0 auto;
+    cursor:grab; touch-action:none;
+  }
+  .stick-area .crosshair {
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:90%; height:90%; pointer-events:none;
+  }
+  .stick-area .crosshair::before, .stick-area .crosshair::after {
+    content:''; position:absolute; background:var(--border);
+  }
+  .stick-area .crosshair::before {
+    width:1px; height:100%; left:50%; top:0;
+  }
+  .stick-area .crosshair::after {
+    width:100%; height:1px; top:50%; left:0;
+  }
+  .stick-dot {
+    width:20px; height:20px; border-radius:50%;
+    background:var(--accent); position:absolute;
+    left:50%; top:50%; transform:translate(-50%,-50%);
+    pointer-events:none; transition:none;
+    box-shadow: 0 0 8px rgba(0,212,255,0.4);
+  }
+  .stick-label {
+    text-align:center; font-size:10px; color:var(--dim);
+    text-transform:uppercase; margin-top:4px;
+  }
+
+  /* ── PID sliders ─────────────────────────────────── */
+  .pid-group { margin-bottom:8px; }
+  .pid-group label {
+    display:flex; justify-content:space-between;
+    font-size:10px; color:var(--dim); margin-bottom:2px;
+  }
+  .pid-group label .pval { color:var(--text); font-weight:600; }
+  .pid-group input[type=range] {
+    width:100%; height:4px; -webkit-appearance:none; appearance:none;
+    background:var(--border); border-radius:2px; outline:none;
+  }
+  .pid-group input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance:none; width:12px; height:12px;
+    border-radius:50%; background:var(--accent); cursor:pointer;
+  }
+
+  /* ── Motor bars ──────────────────────────────────── */
+  .mbar { margin-bottom:6px; }
+  .mbar .mhdr {
+    display:flex; justify-content:space-between;
+    font-size:10px; margin-bottom:2px;
+  }
+  .mbar .mhdr .mn { color:var(--dim); }
+  .mbar .mhdr .mv { font-weight:600; }
+  .mbar .mtrack {
+    height:10px; background:var(--bg); border-radius:2px; overflow:hidden;
+  }
+  .mbar .mfill {
+    height:100%; border-radius:2px; transition:width 0.05s linear;
+  }
+
+  /* ── Graph canvas ────────────────────────────────── */
+  .graph-wrap { width:100%; }
+  #graphCanvas { width:100%; border-radius:4px; display:block; }
+
+  /* ── Bottom bar ──────────────────────────────────── */
+  .bottom {
+    grid-column:1/-1;
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Header ────────────────────────────────────────── -->
+<div class="hdr">
+  <h1>FIRMWARE EMULATOR</h1>
+  <div class="sep"></div>
+  <button class="btn" id="armBtn">ARM</button>
+  <button class="btn danger" id="resetBtn">RESET</button>
+  <div class="sep"></div>
+  <a class="nav" href="/">Telemetry Dashboard</a>
+  <a class="nav" href="/circuit.html">Circuit Diagram</a>
+  <div class="hdr-stats">
+    <span>LOOP <span class="v" id="hzVal">0</span> Hz</span>
+    <span>SIM <span class="v" id="simT">0.0</span>s</span>
+    <span>CPU <span class="v" id="cpuVal">0</span>%</span>
+    <span id="gpStat" style="color:var(--dim)">GP: --</span>
+  </div>
+</div>
+
+<!-- ── Main grid ─────────────────────────────────────── -->
+<div class="main">
+
+  <!-- LEFT: Hardware Components -->
+  <div class="left-col">
+    <div class="panel">
+      <h2>Hardware Components</h2>
+
+      <!-- Battery + PDB -->
+      <div class="hw-card" id="hwBatt">
+        <h3>4S LiPo Battery <span class="chip power">POWER</span></h3>
+        <div class="row"><span class="lbl">Voltage</span><span class="val" id="battV">16.8</span></div>
+        <div class="row"><span class="lbl">Current</span><span class="val" id="battA">0.0 A</span></div>
+        <div class="row"><span class="lbl">Cell Avg</span><span class="val" id="cellV">4.20 V</span></div>
+      </div>
+      <div class="flow-arrow" id="fa1">-- PDB 5V BEC --></div>
+
+      <!-- ESP32 -->
+      <div class="hw-card" id="hwEsp">
+        <h3>ESP32 DevKit V1 <span class="chip wifi">WiFi</span></h3>
+        <div class="row"><span class="lbl">Core 0</span><span class="val ok" id="c0task">Fusion+UDP</span></div>
+        <div class="row"><span class="lbl">Core 1</span><span class="val ok" id="c1task">Attitude Ctrl</span></div>
+        <div class="row"><span class="lbl">Free Heap</span><span class="val" id="heap">240 KB</span></div>
+        <div class="row"><span class="lbl">WiFi</span><span class="val ok" id="wifiSt">CONNECTED</span></div>
+      </div>
+      <div class="flow-arrow active" id="fa2">-- I2C 400kHz --></div>
+
+      <!-- MPU6050 -->
+      <div class="hw-card" id="hwImu">
+        <h3>MPU6050 (GY-521) <span class="chip i2c">I2C 0x68</span></h3>
+        <div class="row"><span class="lbl">Accel X</span><span class="val" id="ax">0.00 g</span></div>
+        <div class="row"><span class="lbl">Accel Y</span><span class="val" id="ay">0.00 g</span></div>
+        <div class="row"><span class="lbl">Accel Z</span><span class="val" id="az">1.00 g</span></div>
+        <div class="row"><span class="lbl">Gyro X</span><span class="val" id="gx">0.0 &deg;/s</span></div>
+        <div class="row"><span class="lbl">Gyro Y</span><span class="val" id="gy">0.0 &deg;/s</span></div>
+        <div class="row"><span class="lbl">Gyro Z</span><span class="val" id="gz">0.0 &deg;/s</span></div>
+      </div>
+
+      <!-- BMP280 -->
+      <div class="hw-card" id="hwBaro">
+        <h3>BMP280 (GY-BMP280) <span class="chip i2c">I2C 0x76</span></h3>
+        <div class="row"><span class="lbl">Pressure</span><span class="val" id="press">1013.25 hPa</span></div>
+        <div class="row"><span class="lbl">Temp</span><span class="val" id="btemp">25.0 &deg;C</span></div>
+        <div class="row"><span class="lbl">Altitude</span><span class="val" id="balt">0.00 m</span></div>
+      </div>
+      <div class="flow-arrow active" id="fa3">-- PWM 50Hz --></div>
+
+      <!-- ESCs + Motors -->
+      <div class="hw-card" id="hwMotors">
+        <h3>ESC + Motors (x4) <span class="chip pwm">LEDC PWM</span></h3>
+        <div class="row"><span class="lbl">M0 FR (GPIO 25)</span><span class="val" id="pwm0">1000 &micro;s</span></div>
+        <div class="row"><span class="lbl">M1 FL (GPIO 26)</span><span class="val" id="pwm1">1000 &micro;s</span></div>
+        <div class="row"><span class="lbl">M2 RL (GPIO 27)</span><span class="val" id="pwm2">1000 &micro;s</span></div>
+        <div class="row"><span class="lbl">M3 RR (GPIO 14)</span><span class="val" id="pwm3">1000 &micro;s</span></div>
+      </div>
+
+      <!-- Status LED -->
+      <div class="hw-card">
+        <h3>Status LED <span class="chip gpio">GPIO 2</span></h3>
+        <div class="row"><span class="lbl">State</span><span class="val" id="ledSt">BLINK</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MIDDLE: Drone View + Pipeline + Graphs -->
+  <div class="mid">
+    <div class="panel">
+      <h2>Drone View (top-down)</h2>
+      <div class="drone-canvas-wrap">
+        <canvas id="droneCanvas" width="360" height="280"></canvas>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Signal Pipeline</h2>
+      <div class="pipeline">
+        <div class="pipe-block">
+          <h4>Sensor Fusion</h4>
+          <div class="pv" id="ppFuse">0.0&deg;</div>
+          <div class="ps">Complementary &alpha;=0.98</div>
+        </div>
+        <div class="pipe-block">
+          <h4>Angle PID</h4>
+          <div class="pv" id="ppAngle">0.0</div>
+          <div class="ps">Kp=4.0 &rarr; rate sp</div>
+        </div>
+        <div class="pipe-block">
+          <h4>Rate PID</h4>
+          <div class="pv" id="ppRate">0.000</div>
+          <div class="ps">Kp=0.005 &rarr; output</div>
+        </div>
+        <div class="pipe-block">
+          <h4>Motor Mixer</h4>
+          <div class="pv" id="ppMix">Quad-X</div>
+          <div class="ps">T&plusmn;R&plusmn;P&plusmn;Y</div>
+        </div>
+        <div class="pipe-block">
+          <h4>PWM Output</h4>
+          <div class="pv" id="ppPwm">1000 &micro;s</div>
+          <div class="ps">50Hz 16-bit LEDC</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel bottom">
+      <h2>Signal Monitor</h2>
+      <div class="graph-wrap">
+        <canvas id="graphCanvas" width="800" height="200"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Controls + PID Tuning + Motors -->
+  <div class="right">
+    <div class="panel">
+      <h2>Virtual Sticks</h2>
+      <div class="stick-row">
+        <div>
+          <div class="stick-area" id="stickL">
+            <div class="crosshair"></div>
+            <div class="stick-dot" id="dotL"></div>
+          </div>
+          <div class="stick-label">Throttle / Yaw</div>
+        </div>
+        <div>
+          <div class="stick-area" id="stickR">
+            <div class="crosshair"></div>
+            <div class="stick-dot" id="dotR"></div>
+          </div>
+          <div class="stick-label">Pitch / Roll</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Attitude</h2>
+      <div class="hw-card">
+        <div class="row"><span class="lbl">Pitch</span><span class="val" id="attP">0.0&deg;</span></div>
+        <div class="row"><span class="lbl">Roll</span><span class="val" id="attR">0.0&deg;</span></div>
+        <div class="row"><span class="lbl">Yaw</span><span class="val" id="attY">0.0&deg;</span></div>
+        <div class="row"><span class="lbl">Altitude</span><span class="val" id="attA">0.00 m</span></div>
+        <div class="row"><span class="lbl">Vert Vel</span><span class="val" id="attVy">0.00 m/s</span></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>PID Tuning</h2>
+      <div class="pid-group">
+        <label>Angle Kp <span class="pval" id="akpV">4.0</span></label>
+        <input type="range" id="akp" min="0" max="10" step="0.1" value="4.0">
+      </div>
+      <div class="pid-group">
+        <label>Rate Kp <span class="pval" id="rkpV">0.005</span></label>
+        <input type="range" id="rkp" min="0" max="0.02" step="0.0005" value="0.005">
+      </div>
+      <div class="pid-group">
+        <label>Rate Ki <span class="pval" id="rkiV">0.001</span></label>
+        <input type="range" id="rki" min="0" max="0.005" step="0.0001" value="0.001">
+      </div>
+      <div class="pid-group">
+        <label>Rate Kd <span class="pval" id="rkdV">0.0002</span></label>
+        <input type="range" id="rkd" min="0" max="0.001" step="0.00002" value="0.0002">
+      </div>
+      <div class="pid-group">
+        <label>Alt Kp <span class="pval" id="alkpV">0.5</span></label>
+        <input type="range" id="alkp" min="0" max="2" step="0.05" value="0.5">
+      </div>
+      <div class="pid-group">
+        <label>Yaw Kp <span class="pval" id="ykpV">0.01</span></label>
+        <input type="range" id="ykp" min="0" max="0.05" step="0.001" value="0.01">
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Motor Output</h2>
+      <div id="motorBars">
+        <div class="mbar"><div class="mhdr"><span class="mn">M0 FR (CW)</span><span class="mv" id="mo0">0%</span></div><div class="mtrack"><div class="mfill" id="mf0" style="width:0%;background:var(--m0)"></div></div></div>
+        <div class="mbar"><div class="mhdr"><span class="mn">M1 FL (CCW)</span><span class="mv" id="mo1">0%</span></div><div class="mtrack"><div class="mfill" id="mf1" style="width:0%;background:var(--m1)"></div></div></div>
+        <div class="mbar"><div class="mhdr"><span class="mn">M2 RL (CW)</span><span class="mv" id="mo2">0%</span></div><div class="mtrack"><div class="mfill" id="mf2" style="width:0%;background:var(--m2)"></div></div></div>
+        <div class="mbar"><div class="mhdr"><span class="mn">M3 RR (CCW)</span><span class="mv" id="mo3">0%</span></div><div class="mtrack"><div class="mfill" id="mf3" style="width:0%;background:var(--m3)"></div></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+'use strict';
+
+const $ = id => document.getElementById(id);
+const clamp = (v,lo,hi) => v < lo ? lo : v > hi ? hi : v;
+const fmt = (v,d) => v.toFixed(d);
+const DEG = 180 / Math.PI;
+const RAD = Math.PI / 180;
+
+/* ================================================================
+   FIRMWARE EMULATION — ported from C source
+   ================================================================ */
+
+/* ── PID Controller (pid_controller.c) ──────────────── */
+class PID {
+  constructor(kp, ki, kd, outMin, outMax, iLimit) {
+    this.kp = kp; this.ki = ki; this.kd = kd;
+    this.outMin = outMin; this.outMax = outMax;
+    this.iLimit = iLimit;
+    this.integral = 0; this.prevError = 0; this.init = false;
+  }
+  reset() { this.integral = 0; this.prevError = 0; this.init = false; }
+  update(sp, meas, dt) {
+    const err = sp - meas;
+    this.integral = clamp(this.integral + err * dt, -this.iLimit, this.iLimit);
+    let deriv = 0;
+    if (this.init) deriv = (err - this.prevError) / dt;
+    this.prevError = err; this.init = true;
+    return clamp(
+      this.kp * err + this.ki * this.integral + this.kd * deriv,
+      this.outMin, this.outMax
+    );
+  }
+}
+
+/* ── Motor Mixer (motor_mixer.c) — Quad-X ──────────── */
+function motorMix(throttle, roll, pitch, yaw) {
+  return [
+    clamp(throttle - roll - pitch - yaw, 0, 1), // M0 FR CW
+    clamp(throttle + roll - pitch + yaw, 0, 1), // M1 FL CCW
+    clamp(throttle + roll + pitch - yaw, 0, 1), // M2 RL CW
+    clamp(throttle - roll + pitch + yaw, 0, 1), // M3 RR CCW
+  ];
+}
+
+/* ── Motor Output (motor_output.c) — PWM microseconds ─ */
+function motorToPwm(v) { return 1000 + v * 1000; } // 0→1000µs, 1→2000µs
+
+/* ── Sensor Fusion (sensor_fusion.c) — complementary ── */
+const ALPHA = 0.98;
+
+/* ── Firmware state ────────────────────────────────── */
+const FW = {
+  // Config (from app_config.h)
+  CONTROL_DT: 1 / 500,
+  CONTROL_HZ: 500,
+  BARO_DIV: 20,
+
+  // PID controllers
+  pitchAnglePID: new PID(4.0, 0.0, 0.0, -200, 200, 30),
+  rollAnglePID:  new PID(4.0, 0.0, 0.0, -200, 200, 30),
+  pitchRatePID:  new PID(0.005, 0.001, 0.0002, -1, 1, 0.3),
+  rollRatePID:   new PID(0.005, 0.001, 0.0002, -1, 1, 0.3),
+  yawPID:        new PID(0.01, 0.005, 0.0, -1, 1, 0.3),
+  altPID:        new PID(0.5, 0.1, 0.2, -0.5, 0.5, 0.3),
+  ALT_VEL_KP: 0.3,
+
+  // Sensor fusion state
+  fusedPitch: 0, fusedRoll: 0, fusedYaw: 0,
+  fusedAlt: 0, prevAlt: 0, vyEst: 0,
+  baroCtr: 0,
+
+  // Controller state
+  prevPitch: 0, prevRoll: 0, prevYaw: 0,
+  altSetpoint: 5.0, altHoldActive: false,
+
+  // Outputs
+  cmd: { throttle: 0, pitch: 0, roll: 0, yaw: 0 },
+  motors: [0, 0, 0, 0],
+
+  // Intermediate values for visualization
+  pitchRateSP: 0, rollRateSP: 0,
+  pitchRate: 0, rollRate: 0, yawRate: 0,
+  altCorrection: 0,
+
+  armed: false,
+};
+
+/* ── Firmware tick — runs at 500Hz ─────────────────── */
+function firmwareTick(sensors) {
+  const dt = FW.CONTROL_DT;
+
+  if (!FW.armed) {
+    FW.motors = [0, 0, 0, 0];
+    FW.cmd = { throttle: 0, pitch: 0, roll: 0, yaw: 0 };
+    return;
+  }
+
+  /* ── Sensor Fusion ─────────────────────────────── */
+  const ax = sensors.ax, ay = sensors.ay, az = sensors.az;
+  const gx = sensors.gx, gy = sensors.gy, gz = sensors.gz;
+
+  const accelPitch = Math.atan2(-ax, Math.sqrt(ay*ay + az*az)) * DEG;
+  const accelRoll  = Math.atan2(ay, az) * DEG;
+
+  FW.fusedPitch = ALPHA * (FW.fusedPitch + gy * dt) + (1 - ALPHA) * accelPitch;
+  FW.fusedRoll  = ALPHA * (FW.fusedRoll  + gx * dt) + (1 - ALPHA) * accelRoll;
+  FW.fusedYaw  += gz * dt;
+  if (FW.fusedYaw > 180)  FW.fusedYaw -= 360;
+  if (FW.fusedYaw < -180) FW.fusedYaw += 360;
+
+  // Baro at 25Hz
+  if (++FW.baroCtr >= FW.BARO_DIV) {
+    FW.baroCtr = 0;
+    FW.prevAlt = FW.fusedAlt;
+    FW.fusedAlt = sensors.alt;
+  }
+  FW.vyEst = (FW.fusedAlt - FW.prevAlt) / (FW.BARO_DIV * dt);
+
+  /* ── Attitude Controller ───────────────────────── */
+  // Derive angular rates
+  FW.pitchRate = (FW.fusedPitch - FW.prevPitch) / dt;
+  FW.rollRate  = (FW.fusedRoll  - FW.prevRoll)  / dt;
+  FW.yawRate   = (FW.fusedYaw   - FW.prevYaw)   / dt;
+  if (FW.yawRate >  180/dt) FW.yawRate -= 360/dt;
+  if (FW.yawRate < -180/dt) FW.yawRate += 360/dt;
+  FW.prevPitch = FW.fusedPitch;
+  FW.prevRoll  = FW.fusedRoll;
+  FW.prevYaw   = FW.fusedYaw;
+
+  // Outer loop: angle → rate setpoint (setpoint = stick input)
+  FW.pitchRateSP = FW.pitchAnglePID.update(stickInput.pitch * 30, FW.fusedPitch, dt);
+  FW.rollRateSP  = FW.rollAnglePID.update(stickInput.roll * 30, FW.fusedRoll, dt);
+
+  // Inner loop: rate → normalized output
+  const pitchOut = FW.pitchRatePID.update(FW.pitchRateSP, FW.pitchRate, dt);
+  const rollOut  = FW.rollRatePID.update(FW.rollRateSP, FW.rollRate, dt);
+
+  // Yaw: rate-only
+  const yawOut = FW.yawPID.update(stickInput.yaw * 200, FW.yawRate, dt);
+
+  // Altitude hold
+  if (!FW.altHoldActive) {
+    FW.altSetpoint = FW.fusedAlt < 0.1 ? 5.0 : FW.fusedAlt;
+    FW.altHoldActive = true;
+    FW.altPID.reset();
+  }
+  // Stick throttle adjusts setpoint
+  FW.altSetpoint += stickInput.throttle * dt * 5.0;
+  FW.altSetpoint = clamp(FW.altSetpoint, 0, 50);
+
+  FW.altCorrection = FW.altPID.update(FW.altSetpoint, FW.fusedAlt, dt);
+  const vvelDamp = -FW.ALT_VEL_KP * FW.vyEst;
+  const throttle = clamp(0.5 + FW.altCorrection + vvelDamp, 0, 1);
+
+  FW.cmd = { throttle, pitch: pitchOut, roll: rollOut, yaw: yawOut };
+  FW.motors = motorMix(throttle, rollOut, pitchOut, yawOut);
+}
+
+
+/* ================================================================
+   PHYSICS SIMULATION — simple 6DOF
+   ================================================================ */
+
+const PHYS = {
+  // State
+  x: 0, y: 0, z: 0,           // position (y=up)
+  vx: 0, vy: 0, vz: 0,        // velocity
+  pitch: 0, roll: 0, yaw: 0,  // attitude (degrees)
+  pitchRate: 0, rollRate: 0, yawRate: 0, // deg/s
+
+  // Constants
+  mass: 0.5,           // kg
+  gravity: 9.81,       // m/s^2
+  maxThrust: 12.0,     // N total (4 motors)
+  armLen: 0.125,       // m
+  Ixx: 0.003,          // moment of inertia (pitch/roll)
+  Izz: 0.005,          // moment of inertia (yaw)
+  dragLin: 0.5,        // linear drag coefficient
+  dragAng: 8.0,        // angular drag coefficient
+  motorTau: 0.02,      // motor response time constant (s)
+
+  // Actual motor output (smoothed)
+  actualMotors: [0, 0, 0, 0],
+};
+
+function physicsStep(commandedMotors, dt) {
+  const P = PHYS;
+
+  // Motor response (first-order lag)
+  for (let i = 0; i < 4; i++) {
+    const target = FW.armed ? commandedMotors[i] : 0;
+    P.actualMotors[i] += (target - P.actualMotors[i]) * (1 - Math.exp(-dt / P.motorTau));
+  }
+
+  const m = P.actualMotors;
+  const thrustPerMotor = P.maxThrust / 4;
+
+  // Total thrust (along body Z-up axis)
+  const totalThrust = (m[0] + m[1] + m[2] + m[3]) * thrustPerMotor;
+
+  // Torques from motor differentials (Quad-X)
+  const rollTorque  = ((-m[0] + m[1] + m[2] - m[3]) * thrustPerMotor * P.armLen);
+  const pitchTorque = ((-m[0] - m[1] + m[2] + m[3]) * thrustPerMotor * P.armLen);
+  const yawTorque   = ((-m[0] + m[1] - m[2] + m[3]) * thrustPerMotor * 0.01); // reaction torque
+
+  // Angular acceleration
+  const pitchAcc = (pitchTorque / P.Ixx - P.dragAng * P.pitchRate) ;
+  const rollAcc  = (rollTorque / P.Ixx  - P.dragAng * P.rollRate);
+  const yawAcc   = (yawTorque / P.Izz   - P.dragAng * P.yawRate * 0.5);
+
+  P.pitchRate += pitchAcc * dt;
+  P.rollRate  += rollAcc * dt;
+  P.yawRate   += yawAcc * dt;
+
+  P.pitch += P.pitchRate * dt;
+  P.roll  += P.rollRate * dt;
+  P.yaw   += P.yawRate * dt;
+  if (P.yaw > 180)  P.yaw -= 360;
+  if (P.yaw < -180) P.yaw += 360;
+
+  // Thrust vector in world frame
+  const pRad = P.pitch * RAD;
+  const rRad = P.roll * RAD;
+  const thrustX = totalThrust * Math.sin(rRad);
+  const thrustY = totalThrust * Math.cos(pRad) * Math.cos(rRad);
+  const thrustZ = totalThrust * Math.sin(pRad);
+
+  // Linear acceleration
+  const ax = thrustX / P.mass - P.dragLin * P.vx;
+  const ay = (thrustY / P.mass) - P.gravity - P.dragLin * P.vy;
+  const az = -thrustZ / P.mass - P.dragLin * P.vz;
+
+  P.vx += ax * dt;
+  P.vy += ay * dt;
+  P.vz += az * dt;
+
+  P.x += P.vx * dt;
+  P.y += P.vy * dt;
+  P.z += P.vz * dt;
+
+  // Ground collision
+  if (P.y < 0) {
+    P.y = 0; P.vy = 0;
+    P.vx *= 0.8; P.vz *= 0.8;
+    P.pitchRate *= 0.5; P.rollRate *= 0.5;
+  }
+
+  return P;
+}
+
+/* Generate sensor readings from physics state */
+function generateSensors() {
+  const P = PHYS;
+  const pRad = P.pitch * RAD, rRad = P.roll * RAD;
+
+  // Accelerometer: gravity in body frame + linear accel + noise
+  const noise = () => (Math.random() - 0.5) * 0.02;
+  const gBody = {
+    ax: -Math.sin(pRad) + noise(),
+    ay:  Math.sin(rRad) * Math.cos(pRad) + noise(),
+    az:  Math.cos(rRad) * Math.cos(pRad) + noise(),
+  };
+
+  // Gyroscope: angular velocity + noise
+  const gNoise = () => (Math.random() - 0.5) * 0.5;
+  return {
+    ax: gBody.ax, ay: gBody.ay, az: gBody.az,
+    gx: P.rollRate + gNoise(),
+    gy: P.pitchRate + gNoise(),
+    gz: P.yawRate + gNoise(),
+    alt: Math.max(0, P.y + (Math.random() - 0.5) * 0.05),
+    pressure: 1013.25 - P.y * 0.12,
+    temp: 25.0 - P.y * 0.0065,
+  };
+}
+
+
+/* ================================================================
+   INPUT — Virtual joysticks
+   ================================================================ */
+
+const stickInput = { throttle: 0, yaw: 0, pitch: 0, roll: 0 };
+
+function setupStick(areaId, dotId, onMove) {
+  const area = $(areaId), dot = $(dotId);
+  let dragging = false;
+  const rect = () => area.getBoundingClientRect();
+
+  function update(clientX, clientY) {
+    const r = rect();
+    const cx = r.left + r.width/2, cy = r.top + r.height/2;
+    const radius = r.width / 2 - 12;
+    let dx = clientX - cx, dy = clientY - cy;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist > radius) { dx *= radius/dist; dy *= radius/dist; }
+    dot.style.left = (50 + (dx / (r.width/2)) * 50) + '%';
+    dot.style.top  = (50 + (dy / (r.height/2)) * 50) + '%';
+    onMove(dx / radius, -dy / radius); // x: -1..1, y: -1..1 (up=positive)
+  }
+
+  function end() {
+    dragging = false;
+    dot.style.left = '50%'; dot.style.top = '50%';
+    onMove(0, 0);
+  }
+
+  area.addEventListener('pointerdown', e => { dragging = true; area.setPointerCapture(e.pointerId); update(e.clientX, e.clientY); });
+  area.addEventListener('pointermove', e => { if (dragging) update(e.clientX, e.clientY); });
+  area.addEventListener('pointerup', end);
+  area.addEventListener('pointercancel', end);
+}
+
+setupStick('stickL', 'dotL', (x, y) => {
+  stickInput.yaw = x;
+  stickInput.throttle = y;
+});
+setupStick('stickR', 'dotR', (x, y) => {
+  stickInput.roll = x;
+  stickInput.pitch = y;
+});
+
+/* Keyboard support */
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.key] = true; });
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+function pollKeyboard() {
+  let t = 0, y = 0, p = 0, r = 0;
+  if (keys['w'] || keys['ArrowUp'])    t =  1;
+  if (keys['s'] || keys['ArrowDown'])  t = -1;
+  if (keys['a'])                       y = -1;
+  if (keys['d'])                       y =  1;
+  if (keys['i'])                       p =  1;
+  if (keys['k'])                       p = -1;
+  if (keys['j'])                       r = -1;
+  if (keys['l'])                       r =  1;
+  // Only override if stick is at center
+  if (stickInput.throttle === 0 && stickInput.yaw === 0) {
+    stickInput.throttle = t; stickInput.yaw = y;
+  }
+  if (stickInput.pitch === 0 && stickInput.roll === 0) {
+    stickInput.pitch = p; stickInput.roll = r;
+  }
+}
+
+
+/* ================================================================
+   INPUT — Gamepad (PS4 / DualShock 4 / DualSense)
+   ================================================================ */
+
+/*  Standard Gamepad mapping (PS4 / DualSense via browser):
+ *  Axes:  0 = Left Stick X,  1 = Left Stick Y
+ *         2 = Right Stick X, 3 = Right Stick Y
+ *  Buttons: 0=Cross, 1=Circle, 2=Square, 3=Triangle
+ *           4=L1, 5=R1, 6=L2, 7=R2
+ *           8=Share, 9=Options, 10=L3, 11=R3
+ *           12=DPad Up, 13=DPad Down, 14=DPad Left, 15=DPad Right
+ *           16=PS Button, 17=Touchpad
+ */
+
+const DEADZONE = 0.08;
+let gamepadIndex = null;
+let gpArmDebounce = false;
+
+window.addEventListener('gamepadconnected', e => {
+  gamepadIndex = e.gamepad.index;
+  $('gpStat').style.color = 'var(--green)';
+  $('gpStat').textContent = 'GP: ' + e.gamepad.id.slice(0, 30);
+  console.log('Gamepad connected:', e.gamepad.id);
+});
+window.addEventListener('gamepaddisconnected', e => {
+  if (e.gamepad.index === gamepadIndex) gamepadIndex = null;
+  $('gpStat').style.color = 'var(--dim)';
+  $('gpStat').textContent = 'GP: --';
+});
+
+function applyDeadzone(v) {
+  return Math.abs(v) < DEADZONE ? 0 : v;
+}
+
+let gpNeedsDotUpdate = false; // deferred to render, not per-tick
+
+function pollGamepad() {
+  if (gamepadIndex === null) return false;
+  const gp = navigator.getGamepads()[gamepadIndex];
+  if (!gp || !gp.connected) return false;
+
+  // Always write all axes — gamepad takes full ownership of stickInput
+  stickInput.yaw      =  applyDeadzone(gp.axes[0]);
+  stickInput.throttle = -applyDeadzone(gp.axes[1]);
+  stickInput.roll     =  applyDeadzone(gp.axes[2]);
+  stickInput.pitch    = -applyDeadzone(gp.axes[3]);
+
+  // L2/R2 triggers add fine throttle trim
+  const l2 = gp.buttons[6].value; // 0..1
+  const r2 = gp.buttons[7].value;
+  if (l2 > 0.05 || r2 > 0.05) {
+    stickInput.throttle = clamp(stickInput.throttle + (r2 - l2) * 0.5, -1, 1);
+  }
+
+  // Triangle (btn 3) = ARM/DISARM toggle
+  if (gp.buttons[3].pressed) {
+    if (!gpArmDebounce) { gpArmDebounce = true; $('armBtn').click(); }
+  } else {
+    gpArmDebounce = false;
+  }
+
+  // Circle (btn 1) = RESET
+  if (gp.buttons[1].pressed) $('resetBtn').click();
+
+  gpNeedsDotUpdate = true;
+  return true; // signals: gamepad is active, skip keyboard
+}
+
+/* Update visual dots once per render frame, not per firmware tick */
+function updateGamepadDots() {
+  if (!gpNeedsDotUpdate) return;
+  gpNeedsDotUpdate = false;
+  $('dotL').style.left = (50 + stickInput.yaw * 40) + '%';
+  $('dotL').style.top  = (50 - stickInput.throttle * 40) + '%';
+  $('dotR').style.left = (50 + stickInput.roll * 40) + '%';
+  $('dotR').style.top  = (50 - stickInput.pitch * 40) + '%';
+}
+
+
+/* ================================================================
+   PID SLIDER BINDINGS
+   ================================================================ */
+
+function bindSlider(id, labelId, target, prop) {
+  const el = $(id), lbl = $(labelId);
+  el.addEventListener('input', () => {
+    const v = parseFloat(el.value);
+    lbl.textContent = v;
+    if (target && prop) target[prop] = v;
+  });
+}
+bindSlider('akp', 'akpV', null, null);
+$('akp').addEventListener('input', () => {
+  const v = parseFloat($('akp').value);
+  $('akpV').textContent = v;
+  FW.pitchAnglePID.kp = v; FW.rollAnglePID.kp = v;
+});
+bindSlider('rkp', 'rkpV', null, null);
+$('rkp').addEventListener('input', () => {
+  const v = parseFloat($('rkp').value);
+  $('rkpV').textContent = v;
+  FW.pitchRatePID.kp = v; FW.rollRatePID.kp = v;
+});
+bindSlider('rki', 'rkiV', null, null);
+$('rki').addEventListener('input', () => {
+  const v = parseFloat($('rki').value);
+  $('rkiV').textContent = v;
+  FW.pitchRatePID.ki = v; FW.rollRatePID.ki = v;
+});
+bindSlider('rkd', 'rkdV', null, null);
+$('rkd').addEventListener('input', () => {
+  const v = parseFloat($('rkd').value);
+  $('rkdV').textContent = v;
+  FW.pitchRatePID.kd = v; FW.rollRatePID.kd = v;
+});
+bindSlider('alkp', 'alkpV', FW.altPID, 'kp');
+bindSlider('ykp', 'ykpV', FW.yawPID, 'kp');
+
+
+/* ================================================================
+   ARM / RESET
+   ================================================================ */
+
+$('armBtn').addEventListener('click', () => {
+  FW.armed = !FW.armed;
+  $('armBtn').textContent = FW.armed ? 'DISARM' : 'ARM';
+  $('armBtn').classList.toggle('armed', FW.armed);
+  if (FW.armed) {
+    FW.altHoldActive = false;
+  } else {
+    // Reset PIDs
+    [FW.pitchAnglePID, FW.rollAnglePID, FW.pitchRatePID,
+     FW.rollRatePID, FW.yawPID, FW.altPID].forEach(p => p.reset());
+  }
+});
+
+$('resetBtn').addEventListener('click', () => {
+  FW.armed = false;
+  $('armBtn').textContent = 'ARM';
+  $('armBtn').classList.remove('armed');
+  FW.fusedPitch = FW.fusedRoll = FW.fusedYaw = 0;
+  FW.fusedAlt = FW.prevAlt = FW.vyEst = 0;
+  FW.prevPitch = FW.prevRoll = FW.prevYaw = 0;
+  FW.altHoldActive = false;
+  FW.motors = [0,0,0,0];
+  [FW.pitchAnglePID, FW.rollAnglePID, FW.pitchRatePID,
+   FW.rollRatePID, FW.yawPID, FW.altPID].forEach(p => p.reset());
+
+  Object.assign(PHYS, {
+    x:0, y:0, z:0, vx:0, vy:0, vz:0,
+    pitch:0, roll:0, yaw:0,
+    pitchRate:0, rollRate:0, yawRate:0,
+    actualMotors: [0,0,0,0],
+  });
+});
+
+
+/* ================================================================
+   VISUALIZATION — Drone top-down canvas
+   ================================================================ */
+
+const droneCtx = $('droneCanvas').getContext('2d');
+const DW = 360, DH = 280;
+
+function drawDrone(motors, pitch, roll, yaw, alt) {
+  const ctx = droneCtx;
+  ctx.clearRect(0, 0, DW, DH);
+
+  const cx = DW/2, cy = DH/2 - 10;
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  // Slight perspective tilt based on pitch/roll
+  const scale = 1 + pitch * 0.002;
+  ctx.scale(1 + roll * 0.001, scale);
+  ctx.rotate(yaw * RAD);
+
+  const arm = 60;
+  const motorColors = ['#ff6b6b','#4ecdc4','#45b7d1','#96ceb4'];
+  const motorLabels = ['M0\nFR','M1\nFL','M2\nRL','M3\nRR'];
+  // Motor positions (Quad-X): FR, FL, RL, RR
+  const mx = [ arm, -arm, -arm,  arm];
+  const my = [-arm, -arm,  arm,  arm];
+
+  // Frame arms
+  ctx.strokeStyle = '#3a506b';
+  ctx.lineWidth = 4;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(mx[i], my[i]); ctx.stroke();
+  }
+
+  // Center body
+  ctx.fillStyle = '#1a1a2e';
+  ctx.strokeStyle = '#0f3460';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(0, 0, 16, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+
+  // Direction indicator (front)
+  ctx.fillStyle = '#ff5252';
+  ctx.beginPath(); ctx.moveTo(-6, -14); ctx.lineTo(6, -14); ctx.lineTo(0, -22); ctx.fill();
+
+  // Motors
+  for (let i = 0; i < 4; i++) {
+    const pwr = motors[i];
+    const radius = 18 + pwr * 12;
+
+    // Prop disc (spinning effect)
+    ctx.globalAlpha = 0.15 + pwr * 0.3;
+    ctx.fillStyle = motorColors[i];
+    ctx.beginPath(); ctx.arc(mx[i], my[i], radius, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Motor hub
+    ctx.fillStyle = '#1a1a2e';
+    ctx.strokeStyle = motorColors[i];
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(mx[i], my[i], 8, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+
+    // Power percentage
+    ctx.fillStyle = motorColors[i];
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(Math.round(pwr * 100) + '%', mx[i], my[i] + 4);
+
+    // Motor label
+    ctx.fillStyle = '#888';
+    ctx.font = '8px monospace';
+    const lines = motorLabels[i].split('\n');
+    ctx.fillText(lines[0], mx[i], my[i] - 24);
+    ctx.fillText(lines[1], mx[i], my[i] - 15);
+
+    // CW/CCW indicator
+    const cw = (i === 0 || i === 2);
+    ctx.strokeStyle = motorColors[i];
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath();
+    const aStart = cw ? 0 : Math.PI;
+    const aEnd = cw ? Math.PI * 1.5 : Math.PI * 2.5;
+    ctx.arc(mx[i], my[i], radius + 3, aStart, aEnd);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.restore();
+
+  // Altitude indicator (right side)
+  ctx.fillStyle = '#888';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('ALT', DW - 10, 20);
+  ctx.fillStyle = '#00d4ff';
+  ctx.font = '14px monospace';
+  ctx.fillText(fmt(alt, 1) + 'm', DW - 10, 36);
+
+  // Attitude readout (left side)
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#888';
+  ctx.font = '10px monospace';
+  ctx.fillText('P ' + fmt(pitch, 1) + '\u00b0', 10, 20);
+  ctx.fillText('R ' + fmt(roll, 1) + '\u00b0', 10, 34);
+  ctx.fillText('Y ' + fmt(yaw, 1) + '\u00b0', 10, 48);
+
+  // Ground indicator
+  if (alt < 0.1) {
+    ctx.fillStyle = 'rgba(255,82,82,0.3)';
+    ctx.fillRect(0, DH - 4, DW, 4);
+    ctx.fillStyle = '#ff5252';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('GROUND', cx, DH - 8);
+  }
+}
+
+
+/* ================================================================
+   VISUALIZATION — Signal graphs
+   ================================================================ */
+
+const graphCtx = $('graphCanvas').getContext('2d');
+const GW = 800, GH = 200;
+const GRAPH_LEN = 400;
+
+const graphData = {
+  pitch: [], roll: [], yaw: [],
+  m0: [], m1: [], m2: [], m3: [],
+  alt: [], altSP: [],
+};
+
+function pushGraph(obj) {
+  for (const k in graphData) {
+    graphData[k].push(obj[k] || 0);
+    if (graphData[k].length > GRAPH_LEN) graphData[k].shift();
+  }
+}
+
+function drawGraphs() {
+  const ctx = graphCtx;
+  ctx.clearRect(0, 0, GW, GH);
+
+  // 3 strips
+  const strips = [
+    { label: 'ATTITUDE (\u00b0)', h: 66, lines: [
+        { data: graphData.pitch, color: '#ff6b6b', range: 45 },
+        { data: graphData.roll,  color: '#4ecdc4', range: 45 },
+        { data: graphData.yaw,   color: '#ffab40', range: 180 },
+      ]},
+    { label: 'MOTORS (%)', h: 66, lines: [
+        { data: graphData.m0, color: '#ff6b6b', range: 1 },
+        { data: graphData.m1, color: '#4ecdc4', range: 1 },
+        { data: graphData.m2, color: '#45b7d1', range: 1 },
+        { data: graphData.m3, color: '#96ceb4', range: 1 },
+      ]},
+    { label: 'ALTITUDE (m)', h: 66, lines: [
+        { data: graphData.alt,   color: '#00d4ff', range: 20 },
+        { data: graphData.altSP, color: '#ffff00', range: 20 },
+      ]},
+  ];
+
+  let yOff = 0;
+  for (const strip of strips) {
+    ctx.fillStyle = 'rgba(22,33,62,0.8)';
+    ctx.fillRect(0, yOff, GW, strip.h);
+
+    // Label
+    ctx.fillStyle = '#555';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(strip.label, 4, yOff + 10);
+
+    // Zero line
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1;
+    const mid = yOff + strip.h / 2;
+    ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(GW, mid); ctx.stroke();
+
+    // Data lines
+    for (const line of strip.lines) {
+      if (line.data.length < 2) continue;
+      ctx.strokeStyle = line.color;
+      ctx.lineWidth = 1.2;
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      for (let i = 0; i < line.data.length; i++) {
+        const x = (i / GRAPH_LEN) * GW;
+        const norm = line.data[i] / line.range;
+        const y = mid - norm * (strip.h / 2 - 4);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // Legend (last values)
+    ctx.textAlign = 'right';
+    ctx.font = '9px monospace';
+    let lx = GW - 6;
+    for (let li = strip.lines.length - 1; li >= 0; li--) {
+      const line = strip.lines[li];
+      const last = line.data.length ? line.data[line.data.length - 1] : 0;
+      ctx.fillStyle = line.color;
+      ctx.fillText(fmt(last, 2), lx, yOff + 10);
+      lx -= 60;
+    }
+
+    yOff += strip.h + 1;
+  }
+}
+
+
+/* ================================================================
+   UI UPDATE — hardware component cards
+   ================================================================ */
+
+function updateUI(sensors) {
+  // MPU6050
+  $('ax').textContent = fmt(sensors.ax, 3) + ' g';
+  $('ay').textContent = fmt(sensors.ay, 3) + ' g';
+  $('az').textContent = fmt(sensors.az, 3) + ' g';
+  $('gx').textContent = fmt(sensors.gx, 1) + ' \u00b0/s';
+  $('gy').textContent = fmt(sensors.gy, 1) + ' \u00b0/s';
+  $('gz').textContent = fmt(sensors.gz, 1) + ' \u00b0/s';
+
+  // BMP280
+  $('press').textContent = fmt(sensors.pressure, 2) + ' hPa';
+  $('btemp').textContent = fmt(sensors.temp, 1) + ' \u00b0C';
+  $('balt').textContent = fmt(sensors.alt, 2) + ' m';
+
+  // Attitude
+  $('attP').textContent = fmt(FW.fusedPitch, 1) + '\u00b0';
+  $('attR').textContent = fmt(FW.fusedRoll, 1) + '\u00b0';
+  $('attY').textContent = fmt(FW.fusedYaw, 1) + '\u00b0';
+  $('attA').textContent = fmt(FW.fusedAlt, 2) + ' m';
+  $('attVy').textContent = fmt(FW.vyEst, 2) + ' m/s';
+
+  // Motors — PWM
+  for (let i = 0; i < 4; i++) {
+    const pwm = motorToPwm(FW.motors[i]);
+    $('pwm' + i).innerHTML = Math.round(pwm) + ' &micro;s';
+    $('mo' + i).textContent = Math.round(FW.motors[i] * 100) + '%';
+    $('mf' + i).style.width = (FW.motors[i] * 100) + '%';
+  }
+
+  // Battery (simulated: current proportional to motor output)
+  const totalMotor = FW.motors.reduce((a,b) => a + b, 0);
+  const current = totalMotor * 8; // ~8A at full throttle per motor → 32A total
+  const voltage = 16.8 - current * 0.02; // simple internal resistance model
+  $('battV').textContent = fmt(voltage, 1) + ' V';
+  $('battA').textContent = fmt(current, 1) + ' A';
+  $('cellV').textContent = fmt(voltage / 4, 2) + ' V';
+  const battEl = $('battV');
+  battEl.className = 'val' + (voltage < 14.0 ? ' err' : voltage < 15.0 ? ' warn' : ' ok');
+
+  // LED state
+  $('ledSt').textContent = FW.armed ? 'SOLID' : 'BLINK';
+  $('ledSt').className = 'val ' + (FW.armed ? 'ok' : 'warn');
+
+  // Signal pipeline
+  $('ppFuse').innerHTML = fmt(FW.fusedPitch, 1) + '\u00b0 / ' + fmt(FW.fusedRoll, 1) + '\u00b0';
+  $('ppAngle').textContent = fmt(FW.pitchRateSP, 1) + ' \u00b0/s';
+  $('ppRate').textContent = fmt(FW.cmd.pitch, 4);
+  $('ppMix').textContent = FW.motors.map(m => Math.round(m*100)).join(' / ');
+  $('ppPwm').innerHTML = Math.round(motorToPwm(FW.motors[0])) + ' &micro;s';
+
+  // Flow arrows
+  $('fa1').className = 'flow-arrow' + (FW.armed ? ' active' : '');
+  $('fa2').className = 'flow-arrow active';
+  $('fa3').className = 'flow-arrow' + (FW.armed ? ' active' : '');
+}
+
+
+/* ================================================================
+   MAIN LOOP — fixed timestep firmware, RAF rendering
+   ================================================================ */
+
+let lastTime = 0;
+let simTime = 0;
+let accumulator = 0;
+let frameCount = 0;
+let fpsTime = 0;
+let ticksPerSec = 0;
+let tickCounter = 0;
+let graphTimer = 0;
+
+const FIRMWARE_DT = FW.CONTROL_DT; // 2ms
+const MAX_STEPS_PER_FRAME = 20;    // prevent spiral of death
+
+let lastSensors = generateSensors();
+
+function mainLoop(timestamp) {
+  requestAnimationFrame(mainLoop);
+
+  if (!lastTime) { lastTime = timestamp; return; }
+  let dt = (timestamp - lastTime) / 1000;
+  lastTime = timestamp;
+
+  // Cap dt to prevent huge jumps (tab switch etc)
+  if (dt > 0.1) dt = 0.1;
+
+  accumulator += dt;
+
+  // Fixed timestep firmware ticks
+  // Poll input once per frame (not per firmware tick — gamepad state doesn't change mid-frame)
+  const gpActive = pollGamepad();
+  if (!gpActive) pollKeyboard();
+
+  let steps = 0;
+  while (accumulator >= FIRMWARE_DT && steps < MAX_STEPS_PER_FRAME) {
+    lastSensors = generateSensors();
+    firmwareTick(lastSensors);
+    physicsStep(FW.motors, FIRMWARE_DT);
+    simTime += FIRMWARE_DT;
+    accumulator -= FIRMWARE_DT;
+    steps++;
+    tickCounter++;
+  }
+
+  // Measure effective tick rate
+  fpsTime += dt;
+  if (fpsTime >= 1.0) {
+    ticksPerSec = tickCounter;
+    tickCounter = 0;
+    fpsTime = 0;
+  }
+
+  // Graph sampling (~30Hz)
+  graphTimer += dt;
+  if (graphTimer >= 0.033) {
+    graphTimer = 0;
+    pushGraph({
+      pitch: FW.fusedPitch, roll: FW.fusedRoll, yaw: FW.fusedYaw,
+      m0: FW.motors[0], m1: FW.motors[1], m2: FW.motors[2], m3: FW.motors[3],
+      alt: PHYS.y, altSP: FW.altSetpoint,
+    });
+  }
+
+  // Render
+  $('hzVal').textContent = ticksPerSec;
+  $('simT').textContent = fmt(simTime, 1);
+  $('cpuVal').textContent = Math.round((steps / MAX_STEPS_PER_FRAME) * 100);
+
+  updateGamepadDots();
+  drawDrone(PHYS.actualMotors, PHYS.pitch, PHYS.roll, PHYS.yaw, PHYS.y);
+  drawGraphs();
+  updateUI(lastSensors);
+}
+
+requestAnimationFrame(mainLoop);
+
+})();
+</script>
+</body>
+</html>

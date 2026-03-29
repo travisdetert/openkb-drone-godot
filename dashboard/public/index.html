@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Drone Telemetry Dashboard</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --panel: #16213e;
+    --border: #0f3460;
+    --text: #e0e0e0;
+    --dim: #888;
+    --accent: #00d4ff;
+    --green: #00e676;
+    --red: #ff5252;
+    --orange: #ffab40;
+    --yellow: #ffff00;
+    --motor0: #ff6b6b;
+    --motor1: #4ecdc4;
+    --motor2: #45b7d1;
+    --motor3: #96ceb4;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    overflow-x: hidden;
+  }
+
+  /* ── Header ─────────────────────────────────────── */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .header h1 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .conn-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--red);
+    flex-shrink: 0;
+  }
+
+  .conn-dot.connected { background: var(--green); }
+
+  .header-stats {
+    display: flex;
+    gap: 20px;
+    font-size: 12px;
+    color: var(--dim);
+    margin-left: auto;
+  }
+
+  .header-stats span { white-space: nowrap; }
+  .header-stats .val { color: var(--text); }
+
+  /* ── Grid layout ────────────────────────────────── */
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+    padding: 12px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+  }
+
+  .panel h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--dim);
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+  }
+
+  /* ── Attitude panel ─────────────────────────────── */
+  .attitude-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .att-value {
+    text-align: center;
+  }
+
+  .att-value .label {
+    font-size: 10px;
+    color: var(--dim);
+    text-transform: uppercase;
+  }
+
+  .att-value .num {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  .att-value .unit {
+    font-size: 11px;
+    color: var(--dim);
+  }
+
+  /* ── Artificial horizon ─────────────────────────── */
+  .horizon-container {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: center;
+    padding: 8px 0;
+  }
+
+  .horizon {
+    width: 160px;
+    height: 160px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    overflow: hidden;
+    position: relative;
+    background: #1a3a5c;
+  }
+
+  .horizon-inner {
+    position: absolute;
+    width: 300px;
+    height: 300px;
+    left: -70px;
+    top: -70px;
+    transition: transform 0.08s linear;
+  }
+
+  .horizon-sky {
+    position: absolute;
+    width: 100%;
+    height: 50%;
+    top: 0;
+    background: linear-gradient(180deg, #1a3a6c, #2d5a8e);
+  }
+
+  .horizon-ground {
+    position: absolute;
+    width: 100%;
+    height: 50%;
+    bottom: 0;
+    background: linear-gradient(180deg, #6b4423, #3d2817);
+  }
+
+  .horizon-line {
+    position: absolute;
+    width: 100%;
+    height: 2px;
+    top: 50%;
+    background: white;
+    transform: translateY(-1px);
+  }
+
+  .horizon-center {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 2;
+  }
+
+  .horizon-center::before,
+  .horizon-center::after {
+    content: '';
+    position: absolute;
+    background: var(--orange);
+  }
+
+  .horizon-center::before {
+    width: 30px;
+    height: 2px;
+    top: 5px;
+    left: -9px;
+  }
+
+  .horizon-center::after {
+    width: 2px;
+    height: 12px;
+    left: 5px;
+    top: 0;
+  }
+
+  /* ── Compass ────────────────────────────────────── */
+  .compass-container {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .compass {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    position: relative;
+    background: var(--bg);
+  }
+
+  .compass-needle {
+    position: absolute;
+    width: 2px;
+    height: 30px;
+    left: 50%;
+    top: 10px;
+    transform-origin: 50% 100%;
+    background: var(--red);
+    margin-left: -1px;
+    transition: transform 0.1s linear;
+  }
+
+  .compass-needle::after {
+    content: '';
+    position: absolute;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 8px solid var(--red);
+    top: -6px;
+    left: -3px;
+  }
+
+  .compass-label {
+    font-size: 9px;
+    position: absolute;
+    color: var(--dim);
+  }
+
+  .compass-n { top: 2px; left: 50%; transform: translateX(-50%); color: var(--red); }
+  .compass-s { bottom: 2px; left: 50%; transform: translateX(-50%); }
+  .compass-e { right: 4px; top: 50%; transform: translateY(-50%); }
+  .compass-w { left: 4px; top: 50%; transform: translateY(-50%); }
+
+  .heading-text {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  /* ── Data rows ──────────────────────────────────── */
+  .data-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+
+  .data-row:last-child { border-bottom: none; }
+
+  .data-row .label {
+    color: var(--dim);
+    font-size: 12px;
+  }
+
+  .data-row .val {
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  /* ── Motor bars ─────────────────────────────────── */
+  .motor-bar-group {
+    margin-bottom: 8px;
+  }
+
+  .motor-bar-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    margin-bottom: 3px;
+  }
+
+  .motor-bar-label .name { color: var(--dim); }
+  .motor-bar-label .rpm { font-weight: 600; }
+
+  .motor-bar-track {
+    height: 14px;
+    background: var(--bg);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .motor-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.08s linear;
+    min-width: 1px;
+  }
+
+  .motor-bar-fill.m0 { background: var(--motor0); }
+  .motor-bar-fill.m1 { background: var(--motor1); }
+  .motor-bar-fill.m2 { background: var(--motor2); }
+  .motor-bar-fill.m3 { background: var(--motor3); }
+
+  /* ── Packet log ─────────────────────────────────── */
+  .log-panel {
+    grid-column: 1 / -1;
+  }
+
+  .log-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+  }
+
+  .log-header h2 { margin-bottom: 0; border-bottom: none; padding-bottom: 0; }
+
+  .log-controls {
+    display: flex;
+    gap: 8px;
+  }
+
+  .btn {
+    background: var(--border);
+    color: var(--text);
+    border: none;
+    padding: 4px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+  }
+
+  .btn:hover { background: var(--accent); color: var(--bg); }
+  .btn.active { background: var(--accent); color: var(--bg); }
+
+  .log-scroll {
+    height: 200px;
+    overflow-y: auto;
+    font-size: 11px;
+    line-height: 1.5;
+    background: var(--bg);
+    border-radius: 4px;
+    padding: 6px 8px;
+  }
+
+  .log-scroll::-webkit-scrollbar { width: 6px; }
+  .log-scroll::-webkit-scrollbar-track { background: var(--bg); }
+  .log-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .log-entry {
+    white-space: pre;
+    overflow-x: auto;
+    color: var(--dim);
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    padding: 1px 0;
+  }
+
+  .log-entry .key { color: var(--accent); }
+  .log-entry .num { color: var(--orange); }
+  .log-entry .bool { color: var(--green); }
+  .log-entry .str { color: var(--yellow); }
+
+  /* ── Responsive ─────────────────────────────────── */
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: 1fr 1fr; }
+    .log-panel { grid-column: 1 / -1; }
+  }
+
+  @media (max-width: 600px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────── -->
+<div class="header">
+  <div class="conn-dot" id="connDot"></div>
+  <h1>DRONE TELEMETRY</h1>
+  <a href="/emulator.html" style="color:#00d4ff;text-decoration:none;font-size:11px;font-family:inherit;">Firmware Emulator</a>
+  <a href="/circuit.html" style="color:#00d4ff;text-decoration:none;font-size:11px;font-family:inherit;">Circuit Diagram</a>
+  <div class="header-stats">
+    <span>PKT/S: <span class="val" id="pktRate">0</span></span>
+    <span>SIM TIME: <span class="val" id="simTime">--</span></span>
+  </div>
+</div>
+
+<!-- ── Dashboard grid ──────────────────────────────────── -->
+<div class="grid">
+
+  <!-- Attitude panel -->
+  <div class="panel">
+    <h2>Attitude</h2>
+    <div class="attitude-grid">
+      <div class="att-value">
+        <div class="label">Pitch</div>
+        <div class="num" id="pitch">0.0</div>
+        <div class="unit">deg</div>
+      </div>
+      <div class="att-value">
+        <div class="label">Roll</div>
+        <div class="num" id="roll">0.0</div>
+        <div class="unit">deg</div>
+      </div>
+      <div class="horizon-container">
+        <div class="horizon">
+          <div class="horizon-inner" id="horizonInner">
+            <div class="horizon-sky"></div>
+            <div class="horizon-ground"></div>
+            <div class="horizon-line"></div>
+          </div>
+          <div class="horizon-center"></div>
+        </div>
+      </div>
+      <div class="compass-container">
+        <div class="compass">
+          <span class="compass-label compass-n">N</span>
+          <span class="compass-label compass-s">S</span>
+          <span class="compass-label compass-e">E</span>
+          <span class="compass-label compass-w">W</span>
+          <div class="compass-needle" id="compassNeedle"></div>
+        </div>
+        <div class="heading-text"><span id="heading">0</span>&deg;</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Flight data panel -->
+  <div class="panel">
+    <h2>Flight Data</h2>
+    <div class="data-row"><span class="label">Altitude</span><span class="val" id="alt">0.00 m</span></div>
+    <div class="data-row"><span class="label">Vert Speed</span><span class="val" id="vs">0.00 m/s</span></div>
+    <div class="data-row"><span class="label">Horiz Speed</span><span class="val" id="hs">0.00 m/s</span></div>
+    <div class="data-row"><span class="label">Velocity X</span><span class="val" id="vx">0.00 m/s</span></div>
+    <div class="data-row"><span class="label">Velocity Z</span><span class="val" id="vz">0.00 m/s</span></div>
+    <div class="data-row"><span class="label">Position X</span><span class="val" id="px">0.00 m</span></div>
+    <div class="data-row"><span class="label">Position Z</span><span class="val" id="pz">0.00 m</span></div>
+  </div>
+
+  <!-- Status + Motors panel -->
+  <div class="panel">
+    <h2>Status</h2>
+    <div class="data-row"><span class="label">State</span><span class="val" id="state">--</span></div>
+    <div class="data-row"><span class="label">Preset</span><span class="val" id="preset">--</span></div>
+    <div class="data-row"><span class="label">Motors</span><span class="val" id="motorCount">--</span></div>
+    <h2 style="margin-top:12px">Motors</h2>
+    <div id="motorBars"></div>
+  </div>
+
+  <!-- Packet log -->
+  <div class="panel log-panel">
+    <div class="log-header">
+      <h2>Packet Log</h2>
+      <div class="log-controls">
+        <button class="btn" id="pauseBtn">Pause</button>
+        <button class="btn" id="clearBtn">Clear</button>
+      </div>
+    </div>
+    <div class="log-scroll" id="logScroll"></div>
+  </div>
+
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  /* ── DOM refs ─────────────────────────────────────── */
+  const $ = id => document.getElementById(id);
+
+  const connDot      = $('connDot');
+  const pktRateEl    = $('pktRate');
+  const simTimeEl    = $('simTime');
+  const pitchEl      = $('pitch');
+  const rollEl       = $('roll');
+  const headingEl    = $('heading');
+  const horizonInner = $('horizonInner');
+  const compassNeedle = $('compassNeedle');
+  const altEl        = $('alt');
+  const vsEl         = $('vs');
+  const hsEl         = $('hs');
+  const vxEl         = $('vx');
+  const vzEl         = $('vz');
+  const pxEl         = $('px');
+  const pzEl         = $('pz');
+  const stateEl      = $('state');
+  const presetEl     = $('preset');
+  const motorCountEl = $('motorCount');
+  const motorBarsEl  = $('motorBars');
+  const logScroll    = $('logScroll');
+  const pauseBtn     = $('pauseBtn');
+  const clearBtn     = $('clearBtn');
+
+  const MAX_RPM = 12000;
+  const LOG_MAX = 50;
+  let logPaused = false;
+  let motorBarCache = [];
+  let connected = false;
+  let lastPacketTime = 0;
+
+  /* ── Motor bar setup ─────────────────────────────── */
+  const motorNames = ['M0 FR', 'M1 FL', 'M2 RL', 'M3 RR'];
+  const motorColors = ['m0', 'm1', 'm2', 'm3'];
+
+  function ensureMotorBars(count) {
+    if (motorBarCache.length === count) return;
+    motorBarsEl.innerHTML = '';
+    motorBarCache = [];
+    for (let i = 0; i < count; i++) {
+      const name = i < motorNames.length ? motorNames[i] : `M${i}`;
+      const color = motorColors[i % motorColors.length];
+      const group = document.createElement('div');
+      group.className = 'motor-bar-group';
+      group.innerHTML = `
+        <div class="motor-bar-label">
+          <span class="name">${name}</span>
+          <span class="rpm" id="motorRpm${i}">0</span>
+        </div>
+        <div class="motor-bar-track">
+          <div class="motor-bar-fill ${color}" id="motorFill${i}" style="width:0%"></div>
+        </div>`;
+      motorBarsEl.appendChild(group);
+      motorBarCache.push({
+        rpm: group.querySelector(`#motorRpm${i}`),
+        fill: group.querySelector(`#motorFill${i}`),
+      });
+    }
+  }
+
+  /* ── Syntax-highlighted JSON ─────────────────────── */
+  function highlightJSON(obj) {
+    const str = JSON.stringify(obj, null, 1);
+    return str
+      .replace(/"([^"]+)"(?=\s*:)/g, '<span class="key">"$1"</span>')
+      .replace(/:\s*(-?\d+\.?\d*)/g, ': <span class="num">$1</span>')
+      .replace(/:\s*(true|false)/g, ': <span class="bool">$1</span>')
+      .replace(/:\s*"([^"]*)"/g, ': <span class="str">"$1"</span>');
+  }
+
+  /* ── Format helpers ──────────────────────────────── */
+  function fmt(v, d) { return v != null ? v.toFixed(d) : '--'; }
+
+  function formatTime(ms) {
+    const s = Math.floor(ms / 1000);
+    const m = Math.floor(s / 60);
+    const h = Math.floor(m / 60);
+    return `${String(h).padStart(2,'0')}:${String(m%60).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+  }
+
+  /* ── Update dashboard ────────────────────────────── */
+  function updateDashboard(msg) {
+    const d = msg.data;
+    if (!d) return;
+
+    lastPacketTime = Date.now();
+
+    /* Header */
+    pktRateEl.textContent = msg.rate || 0;
+    if (d.t != null) simTimeEl.textContent = formatTime(d.t);
+
+    /* Attitude */
+    if (d.att) {
+      const pitch = d.att[0];
+      const yaw   = d.att[1];
+      const roll  = d.att[2];
+
+      pitchEl.textContent = fmt(pitch, 1);
+      rollEl.textContent  = fmt(roll, 1);
+
+      /* Artificial horizon: rotate=roll, translateY=pitch */
+      const pitchPx = pitch * 1.2;
+      horizonInner.style.transform = `rotate(${-roll}deg) translateY(${pitchPx}px)`;
+    }
+
+    /* Heading / compass */
+    if (d.hdg != null) {
+      headingEl.textContent = Math.round(d.hdg);
+      compassNeedle.style.transform = `rotate(${d.hdg}deg)`;
+    }
+
+    /* Flight data */
+    if (d.pos) {
+      altEl.textContent = fmt(d.pos[1], 2) + ' m';
+      pxEl.textContent  = fmt(d.pos[0], 2) + ' m';
+      pzEl.textContent  = fmt(d.pos[2], 2) + ' m';
+    }
+    if (d.vel) {
+      vsEl.textContent = fmt(d.vel[1], 2) + ' m/s';
+      vxEl.textContent = fmt(d.vel[0], 2) + ' m/s';
+      vzEl.textContent = fmt(d.vel[2], 2) + ' m/s';
+    }
+    if (d.spd != null) {
+      hsEl.textContent = fmt(d.spd, 2) + ' m/s';
+    }
+
+    /* Status */
+    stateEl.textContent = d.active ? 'ACTIVE' : 'STANDBY';
+    stateEl.style.color = d.active ? 'var(--green)' : 'var(--dim)';
+    if (d.preset) presetEl.textContent = d.preset;
+
+    /* Motors */
+    if (d.motors) {
+      const mc = d.motors.length;
+      motorCountEl.textContent = mc;
+      ensureMotorBars(mc);
+      for (let i = 0; i < mc; i++) {
+        const rpm = d.motors[i] || 0;
+        const pct = Math.min(100, (rpm / MAX_RPM) * 100);
+        motorBarCache[i].rpm.textContent = Math.round(rpm);
+        motorBarCache[i].fill.style.width = pct + '%';
+      }
+    }
+
+    /* Packet log */
+    if (!logPaused) {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = highlightJSON(d);
+      logScroll.appendChild(entry);
+      while (logScroll.children.length > LOG_MAX) {
+        logScroll.removeChild(logScroll.firstChild);
+      }
+      logScroll.scrollTop = logScroll.scrollHeight;
+    }
+  }
+
+  /* ── WebSocket ───────────────────────────────────── */
+  let ws;
+  let reconnectTimer;
+
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}`);
+
+    ws.onopen = () => {
+      connected = true;
+      connDot.classList.add('connected');
+      console.log('WebSocket connected');
+    };
+
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'telemetry') {
+          updateDashboard(msg);
+        }
+      } catch { /* ignore */ }
+    };
+
+    ws.onclose = () => {
+      connected = false;
+      connDot.classList.remove('connected');
+      console.log('WebSocket disconnected, reconnecting...');
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connect, 2000);
+    };
+
+    ws.onerror = () => ws.close();
+  }
+
+  connect();
+
+  /* ── Connection staleness check ──────────────────── */
+  setInterval(() => {
+    if (lastPacketTime && Date.now() - lastPacketTime > 3000) {
+      pktRateEl.textContent = '0';
+    }
+  }, 1000);
+
+  /* ── Log controls ────────────────────────────────── */
+  pauseBtn.addEventListener('click', () => {
+    logPaused = !logPaused;
+    pauseBtn.textContent = logPaused ? 'Resume' : 'Pause';
+    pauseBtn.classList.toggle('active', logPaused);
+  });
+
+  clearBtn.addEventListener('click', () => {
+    logScroll.innerHTML = '';
+  });
+
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Circuit Diagram — OpenKB Drone</title>
+<style>
+  :root {
+    --bg: #1a1a2e; --panel: #16213e; --border: #0f3460;
+    --text: #e0e0e0; --dim: #888; --accent: #00d4ff;
+    --green: #00e676; --red: #ff5252; --orange: #ffab40; --yellow: #ffff00;
+    --purple: #ce93d8; --pink: #f48fb1;
+    --m0: #ff6b6b; --m1: #4ecdc4; --m2: #45b7d1; --m3: #96ceb4;
+    --i2c: #ce93d8; --pwm: #a5d6a7; --power: #ffab91; --gnd: #666;
+    --signal: #90caf9;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'SF Mono','Fira Code','Cascadia Code',monospace;
+    background: var(--bg); color: var(--text); font-size: 12px;
+    overflow-x: auto;
+  }
+
+  /* ── Header ──────────────────────────────────── */
+  .hdr {
+    display:flex; align-items:center; gap:12px;
+    padding:8px 14px; background:var(--panel); border-bottom:1px solid var(--border);
+  }
+  .hdr h1 { font-size:13px; color:var(--accent); flex-shrink:0; }
+  .hdr .sep { width:1px; height:18px; background:var(--border); }
+  a.nav { color:var(--accent); text-decoration:none; font-size:11px; }
+  a.nav:hover { text-decoration:underline; }
+  .hdr-right { margin-left:auto; display:flex; gap:12px; align-items:center; }
+  .btn {
+    background:var(--border); color:var(--text); border:none;
+    padding:4px 12px; border-radius:3px; cursor:pointer;
+    font-family:inherit; font-size:11px; font-weight:600;
+  }
+  .btn:hover { background:var(--accent); color:var(--bg); }
+  .btn.active { background:var(--accent); color:var(--bg); }
+  .legend { display:flex; gap:14px; font-size:10px; color:var(--dim); }
+  .legend-item { display:flex; align-items:center; gap:4px; }
+  .legend-dot {
+    width:10px; height:10px; border-radius:2px;
+  }
+
+  /* ── Canvas container ────────────────────────── */
+  .canvas-wrap {
+    display:flex; justify-content:center; padding:10px;
+  }
+  #circuitCanvas {
+    border-radius:6px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+  }
+
+  /* ── Tooltip ─────────────────────────────────── */
+  #tooltip {
+    display:none; position:fixed; z-index:100;
+    background:#0a0e1a; border:1px solid var(--accent);
+    border-radius:6px; padding:10px 14px;
+    max-width:300px; pointer-events:none;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  }
+  #tooltip h3 {
+    font-size:12px; color:var(--accent); margin-bottom:4px;
+  }
+  #tooltip .desc {
+    font-size:11px; color:var(--text); line-height:1.5; margin-bottom:6px;
+  }
+  #tooltip .signal-type {
+    display:inline-block; font-size:9px; padding:2px 6px;
+    border-radius:3px; font-weight:700; margin-right:4px;
+  }
+  #tooltip .detail {
+    font-size:10px; color:var(--dim); margin-top:4px;
+  }
+  #tooltip canvas { margin-top:6px; border-radius:3px; }
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <h1>CIRCUIT DIAGRAM</h1>
+  <div class="sep"></div>
+  <a class="nav" href="/emulator.html">Firmware Emulator</a>
+  <a class="nav" href="/">Telemetry Dashboard</a>
+  <div class="hdr-right">
+    <button class="btn active" id="btnAnimate">Signals ON</button>
+    <button class="btn" id="btnLabels">Labels</button>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:var(--power)"></div> Power</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--gnd)"></div> Ground</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--i2c)"></div> I2C Bus</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--pwm)"></div> PWM Signal</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--signal)"></div> WiFi/UDP</div>
+    </div>
+  </div>
+</div>
+
+<div class="canvas-wrap">
+  <canvas id="circuitCanvas" width="1200" height="820"></canvas>
+</div>
+
+<div id="tooltip">
+  <h3 id="ttTitle"></h3>
+  <div class="desc" id="ttDesc"></div>
+  <div id="ttBadges"></div>
+  <div class="detail" id="ttDetail"></div>
+  <canvas id="ttWave" width="220" height="40"></canvas>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+const canvas = document.getElementById('circuitCanvas');
+const ctx = canvas.getContext('2d');
+const W = 1200, H = 820;
+
+const tooltip = document.getElementById('tooltip');
+const ttTitle = document.getElementById('ttTitle');
+const ttDesc = document.getElementById('ttDesc');
+const ttBadges = document.getElementById('ttBadges');
+const ttDetail = document.getElementById('ttDetail');
+const ttWaveCanvas = document.getElementById('ttWave');
+const ttWaveCtx = ttWaveCanvas.getContext('2d');
+
+let showSignals = true;
+let showLabels = true;
+let simTime = 0;
+
+/* Simulated motor outputs for animation (standalone page) */
+const sim = {
+  armed: true,
+  motors: [0.45, 0.50, 0.48, 0.52],
+  pitch: 2.1, roll: -1.3, yaw: 0.5, alt: 5.2,
+  i2cActive: true,
+  breathe: 0,
+};
+
+document.getElementById('btnAnimate').addEventListener('click', function() {
+  showSignals = !showSignals;
+  this.textContent = showSignals ? 'Signals ON' : 'Signals OFF';
+  this.classList.toggle('active', showSignals);
+});
+document.getElementById('btnLabels').addEventListener('click', function() {
+  showLabels = !showLabels;
+  this.classList.toggle('active', showLabels);
+});
+
+/* ================================================================
+   COMPONENT DEFINITIONS
+   ================================================================ */
+
+const C = {
+  // ESP32 — center of the diagram
+  esp: { x: 440, y: 200, w: 320, h: 260 },
+  // Sensors (left)
+  mpu: { x: 60, y: 160, w: 160, h: 120 },
+  bmp: { x: 60, y: 340, w: 160, h: 100 },
+  // Motors + ESCs (right)
+  esc: [
+    { x: 900, y: 60,  w: 120, h: 70,  motor: 0, label:'ESC 0', pin: 'GPIO 25', color:'#ff6b6b' },
+    { x: 900, y: 170, w: 120, h: 70,  motor: 1, label:'ESC 1', pin: 'GPIO 26', color:'#4ecdc4' },
+    { x: 900, y: 280, w: 120, h: 70,  motor: 2, label:'ESC 2', pin: 'GPIO 27', color:'#45b7d1' },
+    { x: 900, y: 390, w: 120, h: 70,  motor: 3, label:'ESC 3', pin: 'GPIO 14', color:'#96ceb4' },
+  ],
+  // Power (bottom)
+  batt: { x: 300, y: 620, w: 180, h: 80 },
+  pdb:  { x: 560, y: 620, w: 160, h: 80 },
+  // LED
+  led:  { x: 440, y: 530, w: 100, h: 50 },
+  // WiFi antenna
+  wifi: { x: 530, y: 60, w: 100, h: 60 },
+};
+
+/* ================================================================
+   HITBOX REGIONS — for tooltip hover
+   ================================================================ */
+
+const regions = [
+  {
+    rect: C.esp, id: 'esp32',
+    title: 'ESP32 DevKit V1 (ESP-WROOM-32)',
+    desc: 'The brain of the drone! This tiny computer has two processors running at 240 million calculations per second. It reads sensors, does math to stay balanced, and tells the motors how fast to spin.',
+    badges: ['240MHz Dual-Core', 'WiFi', '520KB RAM'],
+    detail: 'Core 0: Sensor reading + WiFi communication\nCore 1: Flight control at 500 times per second',
+    wave: 'clock',
+  },
+  {
+    rect: C.mpu, id: 'mpu6050',
+    title: 'MPU6050 IMU (GY-521)',
+    desc: 'An accelerometer + gyroscope in one chip! The accelerometer measures tilt by feeling gravity (like how you know which way is down with your eyes closed). The gyroscope measures how fast the drone is spinning.',
+    badges: ['I2C 0x68', '6-Axis', '500Hz'],
+    detail: 'Accelerometer: measures gravity direction (tilt)\nGyroscope: measures rotation speed\nBoth send data over 2 tiny wires (I2C bus)',
+    wave: 'sine',
+  },
+  {
+    rect: C.bmp, id: 'bmp280',
+    title: 'BMP280 Barometer (GY-BMP280)',
+    desc: 'Measures air pressure to figure out altitude! Air gets thinner the higher you go, so by measuring pressure very precisely, this chip can tell how many meters above the ground the drone is.',
+    badges: ['I2C 0x76', 'Pressure', '25Hz'],
+    detail: 'At sea level: ~1013.25 hPa\nEvery 8.4m higher: pressure drops ~1 hPa\nAlso measures temperature (needed for accurate altitude)',
+    wave: 'baro',
+  },
+  {
+    rect: C.led, id: 'led',
+    title: 'Status LED (GPIO 2)',
+    desc: 'A simple light that blinks to show the drone is working! Blinks when waiting, stays solid when armed and ready to fly. It is like a heartbeat for the drone.',
+    badges: ['Digital Output', 'GPIO 2'],
+    detail: 'Disarmed: blinks every 500ms\nArmed: solid ON\nError: fast blink',
+    wave: 'blink',
+  },
+  {
+    rect: C.batt, id: 'battery',
+    title: '4S LiPo Battery (14.8V)',
+    desc: 'Four lithium-polymer cells stacked together! "4S" means 4 cells in series. Each cell is 3.7V, so 4 x 3.7 = 14.8V. It can dump tons of energy very quickly to spin the motors fast.',
+    badges: ['4S 14.8V', '1500mAh', '75C Discharge'],
+    detail: 'Full charge: 16.8V (4.2V per cell)\nEmpty: 13.2V (3.3V per cell) -- STOP HERE!\n75C rating means it can output 75 x 1.5 = 112.5 amps!',
+    wave: null,
+  },
+  {
+    rect: C.pdb, id: 'pdb',
+    title: 'Power Distribution Board',
+    desc: 'Splits the battery power to all 4 ESCs evenly, and has a special circuit (BEC) that steps the voltage down to 5V to safely power the ESP32 brain.',
+    badges: ['5V BEC', 'Power Split'],
+    detail: 'Input: 14.8V from battery\nOutputs: 14.8V to each ESC\nBEC output: 5V regulated for ESP32',
+    wave: null,
+  },
+  {
+    rect: C.wifi, id: 'wifi',
+    title: 'WiFi Antenna (ESP32 built-in)',
+    desc: 'The ESP32 has WiFi built right in! It talks to your computer over the air using tiny data packets sent 50 times per second. That is how the simulator controls the drone and gets sensor data back.',
+    badges: ['2.4GHz', 'UDP', '50Hz TX/RX'],
+    detail: 'Port 4210: receives commands from simulator\nPort 4211: sends sensor data back\nProtocol: custom binary (0xAA 0x55 sync bytes)',
+    wave: 'packet',
+  },
+];
+
+// Add ESC regions
+C.esc.forEach((e, i) => {
+  regions.push({
+    rect: e, id: 'esc' + i,
+    title: `${e.label} + Motor ${i} (${['Front-Right CW','Front-Left CCW','Rear-Left CW','Rear-Right CCW'][i]})`,
+    desc: `The ESC is like a volume knob for the motor. The ESP32 sends a PWM signal (a pulse between 1000-2000 microseconds), and the ESC converts that into the right amount of power for the brushless motor. ${['CW means clockwise.','CCW means counter-clockwise.','CW means clockwise.','CCW means counter-clockwise.'][i]}`,
+    badges: ['PWM 50Hz', e.pin, '20A BLHeli_S'],
+    detail: `PWM pulse: 1000\u00b5s = stop, 2000\u00b5s = full speed\nThe ESC rapidly switches 3 motor wires on/off\nto create a spinning magnetic field`,
+    wave: 'pwm',
+  });
+});
+
+/* ================================================================
+   DRAWING HELPERS
+   ================================================================ */
+
+function roundRect(x, y, w, h, r, fill, stroke, lw) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw || 1.5; ctx.stroke(); }
+}
+
+function drawChip(x, y, w, h, label, subtitle, borderColor, glowActive) {
+  // Glow when active
+  if (glowActive && showSignals) {
+    ctx.shadowColor = borderColor;
+    ctx.shadowBlur = 12;
+  }
+  roundRect(x, y, w, h, 6, '#0d1117', borderColor, 2);
+  ctx.shadowBlur = 0;
+
+  // Chip notch
+  ctx.fillStyle = borderColor;
+  ctx.fillRect(x + w/2 - 15, y - 1, 30, 4);
+
+  // IC pins (decorative)
+  const pinCount = Math.floor(h / 14);
+  ctx.fillStyle = '#555';
+  for (let i = 0; i < pinCount; i++) {
+    const py = y + 10 + i * ((h - 20) / (pinCount - 1));
+    ctx.fillRect(x - 6, py - 2, 6, 4);
+    ctx.fillRect(x + w, py - 2, 6, 4);
+  }
+
+  // Label
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, x + w/2, y + 20);
+
+  if (subtitle) {
+    ctx.fillStyle = '#888';
+    ctx.font = '10px monospace';
+    ctx.fillText(subtitle, x + w/2, y + 34);
+  }
+}
+
+/* Animated signal particles along a path */
+function drawSignalPath(points, color, active, type) {
+  // Draw wire
+  ctx.strokeStyle = active ? color : '#2a2a4a';
+  ctx.lineWidth = active ? 2 : 1;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) {
+    ctx.lineTo(points[i][0], points[i][1]);
+  }
+  ctx.stroke();
+
+  if (!active || !showSignals) return;
+
+  // Animated particles
+  const totalLen = pathLength(points);
+  const particleCount = Math.max(2, Math.floor(totalLen / 60));
+  const speed = type === 'i2c' ? 0.3 : type === 'power' ? 0.15 : 0.5;
+
+  for (let p = 0; p < particleCount; p++) {
+    const t = ((simTime * speed + p / particleCount) % 1);
+    const pos = pointAlongPath(points, t * totalLen);
+    const radius = type === 'power' ? 4 : 3;
+    ctx.beginPath();
+    ctx.arc(pos[0], pos[1], radius, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.5 + 0.5 * Math.sin(t * Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function pathLength(pts) {
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i][0] - pts[i-1][0], dy = pts[i][1] - pts[i-1][1];
+    len += Math.sqrt(dx*dx + dy*dy);
+  }
+  return len;
+}
+
+function pointAlongPath(pts, dist) {
+  let remaining = dist;
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i][0] - pts[i-1][0], dy = pts[i][1] - pts[i-1][1];
+    const segLen = Math.sqrt(dx*dx + dy*dy);
+    if (remaining <= segLen) {
+      const t = remaining / segLen;
+      return [pts[i-1][0] + dx*t, pts[i-1][1] + dy*t];
+    }
+    remaining -= segLen;
+  }
+  return pts[pts.length - 1];
+}
+
+/* Draw a mini PWM waveform */
+function drawPWMWave(x, y, w, h, duty, color) {
+  const onW = w * duty * 0.4;
+  const offW = w * 0.4 - onW;
+  const cycles = 2.5;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  let cx = x;
+  for (let c = 0; c < cycles; c++) {
+    ctx.moveTo(cx, y + h);
+    ctx.lineTo(cx, y);
+    ctx.lineTo(cx + onW, y);
+    ctx.lineTo(cx + onW, y + h);
+    ctx.lineTo(cx + onW + offW, y + h);
+    cx += onW + offW;
+  }
+  ctx.stroke();
+}
+
+/* ================================================================
+   ESP32 PINOUT DIAGRAM
+   ================================================================ */
+
+function drawESP32() {
+  const e = C.esp;
+
+  // Board outline
+  ctx.shadowColor = 'rgba(0,212,255,0.15)';
+  ctx.shadowBlur = 20;
+  roundRect(e.x, e.y, e.w, e.h, 8, '#0a0f1e', '#00d4ff', 2);
+  ctx.shadowBlur = 0;
+
+  // USB connector (top)
+  roundRect(e.x + e.w/2 - 20, e.y - 12, 40, 16, 3, '#333', '#555', 1);
+  ctx.fillStyle = '#555';
+  ctx.font = '8px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('USB', e.x + e.w/2, e.y - 1);
+
+  // Module (metal shield)
+  roundRect(e.x + 40, e.y + 30, e.w - 80, 80, 4, '#1a2233', '#334466', 1);
+  ctx.fillStyle = '#00d4ff';
+  ctx.font = 'bold 13px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('ESP-WROOM-32', e.x + e.w/2, e.y + 65);
+  ctx.fillStyle = '#667';
+  ctx.font = '10px monospace';
+  ctx.fillText('240MHz Dual-Core', e.x + e.w/2, e.y + 80);
+  ctx.fillText('WiFi + Bluetooth', e.x + e.w/2, e.y + 93);
+
+  // Antenna trace (zigzag at top of module)
+  ctx.strokeStyle = '#334466';
+  ctx.lineWidth = 1;
+  const antX = e.x + e.w/2 - 30;
+  const antY = e.y + 35;
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    ctx.lineTo(antX + i*8, antY + (i%2 ? 5 : 0));
+  }
+  ctx.stroke();
+
+  // ── Pin definitions ──
+  // Left side (top to bottom)
+  const leftPins = [
+    { label: '3V3',    type: 'power',  color: '#ff6b44', desc: '3.3V output' },
+    { label: 'GND',    type: 'gnd',    color: '#666',    desc: 'Ground' },
+    { label: 'GPIO 15',type: 'unused', color: '#333',    desc: '' },
+    { label: 'GPIO 2', type: 'gpio',   color: '#ffff00', desc: 'STATUS LED', active: true },
+    { label: 'GPIO 4', type: 'unused', color: '#333',    desc: '' },
+    { label: 'GPIO 16',type: 'unused', color: '#333',    desc: '' },
+    { label: 'GPIO 17',type: 'unused', color: '#333',    desc: '' },
+    { label: 'GPIO 5', type: 'unused', color: '#333',    desc: '' },
+    { label: 'GPIO 18',type: 'unused', color: '#333',    desc: '' },
+    { label: 'GPIO 19',type: 'unused', color: '#333',    desc: '' },
+    { label: 'GPIO 21',type: 'i2c',    color: '#ce93d8', desc: 'I2C SDA', active: true },
+    { label: 'GPIO 22',type: 'i2c',    color: '#ce93d8', desc: 'I2C SCL', active: true },
+    { label: 'GPIO 23',type: 'unused', color: '#333',    desc: '' },
+  ];
+
+  // Right side (top to bottom)
+  const rightPins = [
+    { label: 'VIN',     type: 'power',  color: '#ff6b44', desc: '5V input from PDB', active: true },
+    { label: 'GND',     type: 'gnd',    color: '#666',    desc: 'Ground' },
+    { label: 'GPIO 13', type: 'unused', color: '#333',    desc: '' },
+    { label: 'GPIO 12', type: 'unused', color: '#333',    desc: '' },
+    { label: 'GPIO 14', type: 'pwm',    color: '#96ceb4', desc: 'MOTOR 3 (RR)', active: true },
+    { label: 'GPIO 27', type: 'pwm',    color: '#45b7d1', desc: 'MOTOR 2 (RL)', active: true },
+    { label: 'GPIO 26', type: 'pwm',    color: '#4ecdc4', desc: 'MOTOR 1 (FL)', active: true },
+    { label: 'GPIO 25', type: 'pwm',    color: '#ff6b6b', desc: 'MOTOR 0 (FR)', active: true },
+    { label: 'GPIO 33', type: 'unused', color: '#333',    desc: '' },
+    { label: 'GPIO 32', type: 'unused', color: '#333',    desc: '' },
+    { label: 'GPIO 35', type: 'unused', color: '#333',    desc: '' },
+    { label: 'GPIO 34', type: 'unused', color: '#333',    desc: '' },
+    { label: 'EN',      type: 'unused', color: '#333',    desc: 'Enable' },
+  ];
+
+  const pinSpacing = (e.h - 30) / (leftPins.length - 1);
+  const pinW = 30, pinH = 8;
+
+  // Draw left pins
+  leftPins.forEach((pin, i) => {
+    const py = e.y + 16 + i * pinSpacing;
+    const px = e.x;
+
+    // Pin rectangle
+    const glow = pin.active && showSignals;
+    if (glow) { ctx.shadowColor = pin.color; ctx.shadowBlur = 6; }
+    ctx.fillStyle = pin.active ? pin.color : pin.color;
+    ctx.globalAlpha = pin.active ? 1 : 0.3;
+    roundRect(px - pinW, py - pinH/2, pinW, pinH, 2, pin.active ? pin.color : '#222', pin.color, 1);
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+
+    // Pin label (outside)
+    ctx.fillStyle = pin.active ? '#fff' : '#444';
+    ctx.font = (pin.active ? 'bold ' : '') + '9px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(pin.label, px - pinW - 4, py + 3);
+
+    // Function label (if active)
+    if (pin.desc && pin.active && showLabels) {
+      ctx.fillStyle = pin.color;
+      ctx.font = 'bold 8px monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(pin.desc, px - pinW - 4, py + 12);
+    }
+  });
+
+  // Draw right pins
+  rightPins.forEach((pin, i) => {
+    const py = e.y + 16 + i * pinSpacing;
+    const px = e.x + e.w;
+
+    const glow = pin.active && showSignals;
+    if (glow) { ctx.shadowColor = pin.color; ctx.shadowBlur = 6; }
+    ctx.fillStyle = pin.active ? pin.color : '#222';
+    ctx.globalAlpha = pin.active ? 1 : 0.3;
+    roundRect(px, py - pinH/2, pinW, pinH, 2, pin.active ? pin.color : '#222', pin.color, 1);
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+
+    ctx.fillStyle = pin.active ? '#fff' : '#444';
+    ctx.font = (pin.active ? 'bold ' : '') + '9px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(pin.label, px + pinW + 4, py + 3);
+
+    if (pin.desc && pin.active && showLabels) {
+      ctx.fillStyle = pin.color;
+      ctx.font = 'bold 8px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(pin.desc, px + pinW + 4, py + 12);
+    }
+  });
+
+  // Internal block diagram labels
+  ctx.fillStyle = 'rgba(0,212,255,0.12)';
+  roundRect(e.x + 15, e.y + 130, 135, 110, 4, 'rgba(0,212,255,0.06)', 'rgba(0,212,255,0.15)', 1);
+  roundRect(e.x + 170, e.y + 130, 135, 110, 4, 'rgba(0,212,255,0.06)', 'rgba(0,212,255,0.15)', 1);
+
+  ctx.fillStyle = '#00d4ff';
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('CORE 0', e.x + 82, e.y + 148);
+  ctx.fillText('CORE 1', e.x + 237, e.y + 148);
+
+  ctx.fillStyle = '#aaa';
+  ctx.font = '9px monospace';
+  ctx.fillText('Sensor Fusion', e.x + 82, e.y + 168);
+  ctx.fillText('WiFi + UDP', e.x + 82, e.y + 182);
+  ctx.fillText('I2C Driver', e.x + 82, e.y + 196);
+
+  ctx.fillText('Attitude Ctrl', e.x + 237, e.y + 168);
+  ctx.fillText('PID x6', e.x + 237, e.y + 182);
+  ctx.fillText('Motor Mixer', e.x + 237, e.y + 196);
+  ctx.fillText('PWM Output', e.x + 237, e.y + 210);
+}
+
+/* ================================================================
+   DRAW PERIPHERAL COMPONENTS
+   ================================================================ */
+
+function drawPeripherals() {
+  // ── MPU6050 ──
+  drawChip(C.mpu.x, C.mpu.y, C.mpu.w, C.mpu.h, 'MPU6050', 'GY-521 Breakout', '#ce93d8', sim.i2cActive);
+  ctx.fillStyle = '#aaa'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('Accel: \u00b14g', C.mpu.x + C.mpu.w/2, C.mpu.y + 55);
+  ctx.fillText('Gyro: \u00b1500\u00b0/s', C.mpu.x + C.mpu.w/2, C.mpu.y + 68);
+  ctx.fillText('Addr: 0x68', C.mpu.x + C.mpu.w/2, C.mpu.y + 81);
+  ctx.fillStyle = '#ce93d8'; ctx.font = 'bold 9px monospace';
+  ctx.fillText('I2C @ 400kHz', C.mpu.x + C.mpu.w/2, C.mpu.y + 100);
+
+  // ── BMP280 ──
+  drawChip(C.bmp.x, C.bmp.y, C.bmp.w, C.bmp.h, 'BMP280', 'GY-BMP280', '#ce93d8', sim.i2cActive);
+  ctx.fillStyle = '#aaa'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('Pressure + Temp', C.bmp.x + C.bmp.w/2, C.bmp.y + 55);
+  ctx.fillText('Addr: 0x76', C.bmp.x + C.bmp.w/2, C.bmp.y + 68);
+  ctx.fillStyle = '#ce93d8'; ctx.font = 'bold 9px monospace';
+  ctx.fillText('I2C @ 400kHz', C.bmp.x + C.bmp.w/2, C.bmp.y + 85);
+
+  // ── ESCs + Motors ──
+  C.esc.forEach((e, i) => {
+    const pwr = sim.motors[i];
+    // ESC box
+    if (showSignals && pwr > 0.1) {
+      ctx.shadowColor = e.color; ctx.shadowBlur = 8 + pwr * 12;
+    }
+    roundRect(e.x, e.y, e.w, e.h, 5, '#0d1117', e.color, 2);
+    ctx.shadowBlur = 0;
+
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(e.label, e.x + e.w/2, e.y + 18);
+    ctx.fillStyle = '#aaa'; ctx.font = '9px monospace';
+    ctx.fillText('20A BLHeli_S', e.x + e.w/2, e.y + 32);
+    ctx.fillText(e.pin, e.x + e.w/2, e.y + 45);
+
+    // Motor power bar
+    ctx.fillStyle = '#1a1a2e';
+    roundRect(e.x + 10, e.y + 52, e.w - 20, 8, 3, '#1a1a2e', null);
+    ctx.fillStyle = e.color;
+    ctx.globalAlpha = 0.8;
+    roundRect(e.x + 10, e.y + 52, (e.w - 20) * pwr, 8, 3, e.color, null);
+    ctx.globalAlpha = 1;
+
+    // Motor disc (spinning)
+    const mx = e.x + e.w + 50, my = e.y + e.h/2;
+    const mRadius = 20 + pwr * 8;
+    ctx.globalAlpha = 0.2 + pwr * 0.4;
+    ctx.fillStyle = e.color;
+    ctx.beginPath(); ctx.arc(mx, my, mRadius, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Motor hub
+    ctx.fillStyle = '#0d1117';
+    ctx.strokeStyle = e.color; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(mx, my, 10, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+
+    // Spinning prop lines
+    if (showSignals && pwr > 0.05) {
+      const cw = (i === 0 || i === 2);
+      const spd = cw ? 1 : -1;
+      ctx.strokeStyle = e.color; ctx.lineWidth = 2; ctx.globalAlpha = 0.6;
+      for (let b = 0; b < 2; b++) {
+        const angle = simTime * spd * 8 + b * Math.PI;
+        ctx.beginPath();
+        ctx.moveTo(mx, my);
+        ctx.lineTo(mx + Math.cos(angle) * mRadius, my + Math.sin(angle) * mRadius);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // Motor label
+    ctx.fillStyle = e.color; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(['M0 FR','M1 FL','M2 RL','M3 RR'][i], mx, my + mRadius + 14);
+    ctx.fillStyle = '#aaa'; ctx.font = '9px monospace';
+    ctx.fillText(Math.round(pwr*100) + '%', mx, my + 4);
+
+    // PWM waveform (between ESP32 and ESC)
+    if (showSignals) {
+      drawPWMWave(e.x - 80, e.y + 20, 60, 15, pwr, e.color);
+    }
+  });
+
+  // ── Battery ──
+  const b = C.batt;
+  roundRect(b.x, b.y, b.w, b.h, 6, '#1a0a0a', '#ff6b44', 2);
+  // Battery terminal
+  ctx.fillStyle = '#ff6b44';
+  ctx.fillRect(b.x + b.w - 2, b.y + 15, 8, 10);
+  ctx.fillStyle = '#666';
+  ctx.fillRect(b.x + b.w - 2, b.y + 35, 8, 10);
+
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('4S LiPo', b.x + b.w/2, b.y + 22);
+  ctx.fillStyle = '#ff6b44'; ctx.font = 'bold 14px monospace';
+  ctx.fillText('14.8V', b.x + b.w/2, b.y + 42);
+  ctx.fillStyle = '#aaa'; ctx.font = '9px monospace';
+  ctx.fillText('1500mAh  XT60', b.x + b.w/2, b.y + 58);
+
+  // Cell indicators
+  for (let c = 0; c < 4; c++) {
+    const cx = b.x + 20 + c * 40;
+    const cy = b.y + 64;
+    roundRect(cx, cy, 30, 10, 2, '#2a1a0a', '#ff6b44', 1);
+    ctx.fillStyle = '#ff6b44'; ctx.font = '7px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('4.2V', cx + 15, cy + 8);
+  }
+
+  // ── PDB ──
+  const p = C.pdb;
+  roundRect(p.x, p.y, p.w, p.h, 6, '#1a0f0a', '#ffab91', 2);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('PDB', p.x + p.w/2, p.y + 22);
+  ctx.fillStyle = '#ffab91'; ctx.font = '10px monospace';
+  ctx.fillText('Power Dist.', p.x + p.w/2, p.y + 38);
+  ctx.fillText('5V BEC \u2192 ESP32', p.x + p.w/2, p.y + 52);
+  ctx.fillStyle = '#aaa'; ctx.font = '9px monospace';
+  ctx.fillText('4x ESC output', p.x + p.w/2, p.y + 68);
+
+  // ── LED ──
+  const l = C.led;
+  const ledOn = showSignals && (sim.armed || Math.sin(simTime * 6) > 0);
+  if (ledOn) { ctx.shadowColor = '#ffff00'; ctx.shadowBlur = 15; }
+  roundRect(l.x, l.y, l.w, l.h, 4, '#1a1a0a', '#ffff00', 1.5);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = ledOn ? '#ffff00' : '#333';
+  ctx.beginPath(); ctx.arc(l.x + l.w/2, l.y + 18, 8, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = ledOn ? '#ffff00' : '#666'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('LED', l.x + l.w/2, l.y + 42);
+
+  // ── WiFi ──
+  const wf = C.wifi;
+  roundRect(wf.x, wf.y, wf.w, wf.h, 4, '#0a1a2e', '#90caf9', 1.5);
+  ctx.fillStyle = '#90caf9'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('WiFi', wf.x + wf.w/2, wf.y + 18);
+  ctx.fillStyle = '#aaa'; ctx.font = '9px monospace';
+  ctx.fillText('2.4GHz', wf.x + wf.w/2, wf.y + 32);
+  ctx.fillText('UDP 4210/4211', wf.x + wf.w/2, wf.y + 44);
+
+  // WiFi waves
+  if (showSignals) {
+    ctx.strokeStyle = '#90caf9'; ctx.lineWidth = 1.5;
+    for (let w = 0; w < 3; w++) {
+      const r = 12 + w * 10 + Math.sin(simTime * 3 + w) * 3;
+      ctx.globalAlpha = 0.5 - w * 0.15;
+      ctx.beginPath();
+      ctx.arc(wf.x + wf.w/2, wf.y - 5, r, -Math.PI * 0.7, -Math.PI * 0.3);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* ================================================================
+   DRAW WIRING
+   ================================================================ */
+
+function drawWiring() {
+  const e = C.esp;
+
+  // ── I2C Bus: MPU6050 + BMP280 → ESP32 GPIO 21/22 ──
+  // SDA line (GPIO 21 is at left pin index 10)
+  const sdaY = e.y + 16 + 10 * ((e.h - 30) / 12);
+  const sclY = e.y + 16 + 11 * ((e.h - 30) / 12);
+
+  // SDA: MPU6050 → junction → ESP32
+  const junctionX = 280;
+  drawSignalPath([
+    [C.mpu.x + C.mpu.w + 6, C.mpu.y + 70],
+    [junctionX, C.mpu.y + 70],
+    [junctionX, sdaY],
+    [e.x - 30, sdaY]
+  ], '#ce93d8', sim.i2cActive, 'i2c');
+
+  // SDA: BMP280 → junction
+  drawSignalPath([
+    [C.bmp.x + C.bmp.w + 6, C.bmp.y + 50],
+    [junctionX, C.bmp.y + 50],
+    [junctionX, sdaY],
+  ], '#ce93d8', sim.i2cActive, 'i2c');
+
+  // SCL: MPU6050 → junction → ESP32
+  const jctX2 = 300;
+  drawSignalPath([
+    [C.mpu.x + C.mpu.w + 6, C.mpu.y + 85],
+    [jctX2, C.mpu.y + 85],
+    [jctX2, sclY],
+    [e.x - 30, sclY]
+  ], '#ba68c8', sim.i2cActive, 'i2c');
+
+  // SCL: BMP280 → junction
+  drawSignalPath([
+    [C.bmp.x + C.bmp.w + 6, C.bmp.y + 65],
+    [jctX2, C.bmp.y + 65],
+    [jctX2, sclY],
+  ], '#ba68c8', sim.i2cActive, 'i2c');
+
+  // I2C bus label
+  if (showLabels) {
+    ctx.fillStyle = '#ce93d8'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('I2C BUS (SDA + SCL)', junctionX + 10, C.mpu.y + 45);
+    ctx.fillStyle = '#aaa'; ctx.font = '9px monospace';
+    ctx.fillText('400kHz Fast Mode', junctionX + 10, C.mpu.y + 57);
+  }
+
+  // Junction dots
+  ctx.fillStyle = '#ce93d8';
+  ctx.beginPath(); ctx.arc(junctionX, sdaY, 4, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#ba68c8';
+  ctx.beginPath(); ctx.arc(jctX2, sclY, 4, 0, Math.PI*2); ctx.fill();
+
+  // ── PWM Signal Lines: ESP32 → ESCs ──
+  const pwmPins = [
+    { rightIdx: 7, esc: 0 }, // GPIO 25 is right pin index 7
+    { rightIdx: 6, esc: 1 }, // GPIO 26 is right pin index 6
+    { rightIdx: 5, esc: 2 }, // GPIO 27 is right pin index 5
+    { rightIdx: 4, esc: 3 }, // GPIO 14 is right pin index 4
+  ];
+
+  pwmPins.forEach(pp => {
+    const py = e.y + 16 + pp.rightIdx * ((e.h - 30) / 12);
+    const esc = C.esc[pp.esc];
+    const active = sim.armed && sim.motors[pp.esc] > 0.02;
+
+    drawSignalPath([
+      [e.x + e.w + 30, py],
+      [e.x + e.w + 60, py],
+      [830, esc.y + esc.h/2],
+      [esc.x, esc.y + esc.h/2],
+    ], esc.color, active, 'pwm');
+  });
+
+  // ── Power: Battery → PDB ──
+  drawSignalPath([
+    [C.batt.x + C.batt.w, C.batt.y + 20],
+    [C.pdb.x, C.pdb.y + 20],
+  ], '#ff6b44', true, 'power');
+
+  // Ground
+  drawSignalPath([
+    [C.batt.x + C.batt.w, C.batt.y + 45],
+    [C.pdb.x, C.pdb.y + 45],
+  ], '#666', true, 'power');
+
+  // ── Power: PDB → ESCs ──
+  C.esc.forEach((esc, i) => {
+    drawSignalPath([
+      [C.pdb.x + C.pdb.w/2 + i * 15, C.pdb.y],
+      [C.pdb.x + C.pdb.w/2 + i * 15, C.pdb.y - 30 - i * 15],
+      [870, C.pdb.y - 30 - i * 15],
+      [870, esc.y + esc.h - 10],
+      [esc.x, esc.y + esc.h - 10],
+    ], '#ff6b44', sim.armed, 'power');
+  });
+
+  // ── Power: PDB BEC → ESP32 VIN ──
+  const vinY = e.y + 16; // VIN is first right pin
+  drawSignalPath([
+    [C.pdb.x + C.pdb.w/2, C.pdb.y],
+    [C.pdb.x + C.pdb.w/2, vinY + 40],
+    [e.x + e.w + 60, vinY + 40],
+    [e.x + e.w + 60, vinY],
+    [e.x + e.w + 30, vinY],
+  ], '#ffab91', true, 'power');
+
+  if (showLabels) {
+    ctx.fillStyle = '#ffab91'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'left';
+    ctx.fillText('5V BEC', e.x + e.w + 65, vinY + 36);
+  }
+
+  // ── LED: ESP32 GPIO 2 → LED ──
+  const ledPinY = e.y + 16 + 3 * ((e.h - 30) / 12); // GPIO 2 is left pin index 3
+  drawSignalPath([
+    [e.x - 30, ledPinY],
+    [e.x - 50, ledPinY],
+    [e.x - 50, C.led.y + C.led.h/2],
+    [C.led.x + C.led.w, C.led.y + C.led.h/2],
+  ], '#ffff00', true, 'pwm');
+
+  // ── WiFi connection (dashed) ──
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = '#90caf9';
+  ctx.lineWidth = 1.5;
+  ctx.globalAlpha = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(C.wifi.x + C.wifi.w/2, C.wifi.y + C.wifi.h);
+  ctx.lineTo(e.x + e.w/2, e.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+
+  // ── 3V3 Power to sensors ──
+  const vccY = e.y + 16; // 3V3 is first left pin
+  drawSignalPath([
+    [e.x - 30, vccY],
+    [e.x - 70, vccY],
+    [e.x - 70, C.mpu.y + 30],
+    [C.mpu.x + C.mpu.w + 6, C.mpu.y + 30],
+  ], '#ff6b44', true, 'power');
+  drawSignalPath([
+    [e.x - 70, C.mpu.y + 30],
+    [e.x - 70, C.bmp.y + 30],
+    [C.bmp.x + C.bmp.w + 6, C.bmp.y + 30],
+  ], '#ff6b44', true, 'power');
+
+  if (showLabels) {
+    ctx.fillStyle = '#ff6b44'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('3.3V', e.x - 70, C.mpu.y + 22);
+  }
+}
+
+/* ================================================================
+   EDUCATIONAL ANNOTATIONS
+   ================================================================ */
+
+function drawAnnotations() {
+  if (!showLabels) return;
+
+  ctx.font = '10px monospace'; ctx.textAlign = 'left';
+
+  // I2C explanation box
+  const bx = 30, by = 500;
+  roundRect(bx, by, 200, 90, 5, 'rgba(206,147,216,0.08)', 'rgba(206,147,216,0.3)', 1);
+  ctx.fillStyle = '#ce93d8'; ctx.font = 'bold 10px monospace';
+  ctx.fillText('What is I2C?', bx + 10, by + 16);
+  ctx.fillStyle = '#bbb'; ctx.font = '9px monospace';
+  ctx.fillText('A 2-wire protocol for chips', bx + 10, by + 32);
+  ctx.fillText('to talk to each other:', bx + 10, by + 44);
+  ctx.fillStyle = '#ce93d8';
+  ctx.fillText('SDA = data wire (send/recv)', bx + 10, by + 60);
+  ctx.fillText('SCL = clock wire (timing)', bx + 10, by + 72);
+  ctx.fillStyle = '#888';
+  ctx.fillText('Multiple chips share 1 bus!', bx + 10, by + 84);
+
+  // PWM explanation box
+  const px = 830, py = 510;
+  roundRect(px, py, 200, 100, 5, 'rgba(165,214,167,0.08)', 'rgba(165,214,167,0.3)', 1);
+  ctx.fillStyle = '#a5d6a7'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
+  ctx.fillText('What is PWM?', px + 10, py + 16);
+  ctx.fillStyle = '#bbb'; ctx.font = '9px monospace';
+  ctx.fillText('Pulse Width Modulation:', px + 10, py + 32);
+  ctx.fillText('a signal that goes ON/OFF', px + 10, py + 44);
+  ctx.fillText('very fast. The longer the', px + 10, py + 56);
+  ctx.fillText('"ON" part, the faster the', px + 10, py + 68);
+  ctx.fillText('motor spins!', px + 10, py + 80);
+  // Mini PWM example
+  drawPWMWave(px + 10, py + 85, 80, 8, 0.3, '#a5d6a7');
+  ctx.fillStyle = '#888'; ctx.font = '8px monospace';
+  ctx.fillText('30%', px + 95, py + 94);
+  drawPWMWave(px + 120, py + 85, 60, 8, 0.8, '#a5d6a7');
+  ctx.fillText('80%', px + 185, py + 94);
+
+  // Power explanation
+  const ex = 300, ey = 730;
+  roundRect(ex, ey, 420, 60, 5, 'rgba(255,171,145,0.08)', 'rgba(255,171,145,0.3)', 1);
+  ctx.fillStyle = '#ffab91'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
+  ctx.fillText('Power Flow', ex + 10, ey + 16);
+  ctx.fillStyle = '#bbb'; ctx.font = '9px monospace';
+  ctx.fillText('Battery (14.8V) \u2192 PDB splits power \u2192 ESCs (14.8V for motors)', ex + 10, ey + 32);
+  ctx.fillText('PDB also steps down to 5V (BEC) \u2192 ESP32 \u2192 3.3V out \u2192 Sensors', ex + 10, ey + 48);
+
+  // Motor layout mini diagram
+  const mlx = 1050, mly = 530;
+  roundRect(mlx - 10, mly - 10, 130, 130, 5, 'rgba(0,212,255,0.05)', 'rgba(0,212,255,0.15)', 1);
+  ctx.fillStyle = '#00d4ff'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('QUAD-X LAYOUT', mlx + 55, mly + 4);
+  ctx.fillStyle = '#888'; ctx.font = '8px monospace';
+  ctx.fillText('(top view)', mlx + 55, mly + 14);
+
+  // Draw mini quad
+  ctx.strokeStyle = '#334'; ctx.lineWidth = 2;
+  const qcx = mlx + 55, qcy = mly + 65;
+  const qa = 35;
+  ctx.beginPath();
+  ctx.moveTo(qcx - qa, qcy - qa); ctx.lineTo(qcx + qa, qcy + qa);
+  ctx.moveTo(qcx + qa, qcy - qa); ctx.lineTo(qcx - qa, qcy + qa);
+  ctx.stroke();
+
+  const qmotors = [
+    { x: qcx + qa, y: qcy - qa, c: '#ff6b6b', l: 'M0', r: 'CW' },
+    { x: qcx - qa, y: qcy - qa, c: '#4ecdc4', l: 'M1', r: 'CCW' },
+    { x: qcx - qa, y: qcy + qa, c: '#45b7d1', l: 'M2', r: 'CW' },
+    { x: qcx + qa, y: qcy + qa, c: '#96ceb4', l: 'M3', r: 'CCW' },
+  ];
+  qmotors.forEach(m => {
+    ctx.fillStyle = m.c; ctx.globalAlpha = 0.3;
+    ctx.beginPath(); ctx.arc(m.x, m.y, 14, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.font = 'bold 8px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(m.l, m.x, m.y + 3);
+    ctx.fillStyle = '#888'; ctx.font = '7px monospace';
+    ctx.fillText(m.r, m.x, m.y + 12);
+  });
+
+  // Front indicator
+  ctx.fillStyle = '#ff5252'; ctx.font = 'bold 8px monospace';
+  ctx.fillText('FRONT', qcx, qcy - qa - 18);
+  ctx.beginPath();
+  ctx.moveTo(qcx - 5, qcy - qa - 10); ctx.lineTo(qcx + 5, qcy - qa - 10);
+  ctx.lineTo(qcx, qcy - qa - 16); ctx.fill();
+}
+
+/* ================================================================
+   TOOLTIP SYSTEM
+   ================================================================ */
+
+let hoveredRegion = null;
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = W / rect.width, scaleY = H / rect.height;
+  const mx = (e.clientX - rect.left) * scaleX;
+  const my = (e.clientY - rect.top) * scaleY;
+
+  hoveredRegion = null;
+  for (const r of regions) {
+    const rc = r.rect;
+    if (mx >= rc.x && mx <= rc.x + rc.w && my >= rc.y && my <= rc.y + rc.h) {
+      hoveredRegion = r;
+      break;
+    }
+  }
+
+  if (hoveredRegion) {
+    canvas.style.cursor = 'pointer';
+    const r = hoveredRegion;
+    ttTitle.textContent = r.title;
+    ttDesc.textContent = r.desc;
+
+    ttBadges.innerHTML = '';
+    (r.badges || []).forEach(b => {
+      const span = document.createElement('span');
+      span.className = 'signal-type';
+      span.textContent = b;
+      // Color by type
+      if (b.includes('I2C'))  span.style.cssText = 'background:#4a148c;color:#ce93d8';
+      else if (b.includes('PWM') || b.includes('GPIO')) span.style.cssText = 'background:#1b5e20;color:#a5d6a7';
+      else if (b.includes('WiFi') || b.includes('UDP') || b.includes('Hz')) span.style.cssText = 'background:#0d47a1;color:#90caf9';
+      else span.style.cssText = 'background:#333;color:#aaa';
+      ttBadges.appendChild(span);
+    });
+
+    ttDetail.textContent = r.detail || '';
+
+    // Position tooltip
+    tooltip.style.display = 'block';
+    let tx = e.clientX + 16, ty = e.clientY + 16;
+    if (tx + 310 > window.innerWidth) tx = e.clientX - 310;
+    if (ty + 250 > window.innerHeight) ty = e.clientY - 250;
+    tooltip.style.left = tx + 'px';
+    tooltip.style.top = ty + 'px';
+
+    // Draw waveform
+    drawTooltipWave(r.wave);
+  } else {
+    canvas.style.cursor = 'default';
+    tooltip.style.display = 'none';
+  }
+});
+
+canvas.addEventListener('mouseleave', () => {
+  tooltip.style.display = 'none';
+  hoveredRegion = null;
+});
+
+function drawTooltipWave(type) {
+  const w = 220, h = 40;
+  ttWaveCtx.clearRect(0, 0, w, h);
+  if (!type) { ttWaveCanvas.style.display = 'none'; return; }
+  ttWaveCanvas.style.display = 'block';
+
+  ttWaveCtx.fillStyle = '#0a0e1a';
+  ttWaveCtx.fillRect(0, 0, w, h);
+  ttWaveCtx.strokeStyle = '#333';
+  ttWaveCtx.lineWidth = 0.5;
+  ttWaveCtx.beginPath();
+  ttWaveCtx.moveTo(0, h/2); ttWaveCtx.lineTo(w, h/2);
+  ttWaveCtx.stroke();
+
+  ttWaveCtx.lineWidth = 1.5;
+  ttWaveCtx.beginPath();
+
+  if (type === 'clock') {
+    ttWaveCtx.strokeStyle = '#00d4ff';
+    for (let x = 0; x < w; x += 10) {
+      ttWaveCtx.moveTo(x, h * 0.8);
+      ttWaveCtx.lineTo(x, h * 0.2);
+      ttWaveCtx.lineTo(x + 5, h * 0.2);
+      ttWaveCtx.lineTo(x + 5, h * 0.8);
+      ttWaveCtx.lineTo(x + 10, h * 0.8);
+    }
+  } else if (type === 'sine') {
+    ttWaveCtx.strokeStyle = '#ce93d8';
+    for (let x = 0; x < w; x++) {
+      const y = h/2 + Math.sin(x * 0.08 + simTime * 3) * (h * 0.35);
+      if (x === 0) ttWaveCtx.moveTo(x, y); else ttWaveCtx.lineTo(x, y);
+    }
+  } else if (type === 'baro') {
+    ttWaveCtx.strokeStyle = '#ce93d8';
+    for (let x = 0; x < w; x++) {
+      const y = h/2 - (h * 0.2) + Math.sin(x * 0.015) * (h * 0.15) + (Math.random() - 0.5) * 2;
+      if (x === 0) ttWaveCtx.moveTo(x, y); else ttWaveCtx.lineTo(x, y);
+    }
+  } else if (type === 'pwm') {
+    ttWaveCtx.strokeStyle = '#a5d6a7';
+    const duty = 0.5 + Math.sin(simTime) * 0.3;
+    const period = 30;
+    for (let x = 0; x < w; x += period) {
+      const onW = period * duty;
+      ttWaveCtx.moveTo(x, h * 0.8);
+      ttWaveCtx.lineTo(x, h * 0.2);
+      ttWaveCtx.lineTo(x + onW, h * 0.2);
+      ttWaveCtx.lineTo(x + onW, h * 0.8);
+      ttWaveCtx.lineTo(x + period, h * 0.8);
+    }
+  } else if (type === 'blink') {
+    ttWaveCtx.strokeStyle = '#ffff00';
+    const period = 40;
+    for (let x = 0; x < w; x += period) {
+      ttWaveCtx.moveTo(x, h * 0.8);
+      ttWaveCtx.lineTo(x, h * 0.2);
+      ttWaveCtx.lineTo(x + period/2, h * 0.2);
+      ttWaveCtx.lineTo(x + period/2, h * 0.8);
+      ttWaveCtx.lineTo(x + period, h * 0.8);
+    }
+  } else if (type === 'packet') {
+    ttWaveCtx.strokeStyle = '#90caf9';
+    let x = 5;
+    // Sync bytes then data
+    const bytes = [0xAA, 0x55, 0x25, 0x83];
+    bytes.forEach((b, bi) => {
+      for (let bit = 7; bit >= 0; bit--) {
+        const high = (b >> bit) & 1;
+        ttWaveCtx.moveTo(x, h * 0.8);
+        ttWaveCtx.lineTo(x, high ? h * 0.2 : h * 0.6);
+        ttWaveCtx.lineTo(x + 5, high ? h * 0.2 : h * 0.6);
+        ttWaveCtx.lineTo(x + 5, h * 0.8);
+        x += 5;
+      }
+      x += 3; // byte gap
+    });
+  }
+  ttWaveCtx.stroke();
+
+  // Label
+  ttWaveCtx.fillStyle = '#555';
+  ttWaveCtx.font = '8px monospace';
+  ttWaveCtx.textAlign = 'right';
+  const labels = { clock:'240MHz Clock', sine:'Gyro Output', baro:'Altitude Reading',
+                    pwm:'PWM Signal', blink:'LED Pattern', packet:'Binary Packet (0xAA 0x55...)' };
+  ttWaveCtx.fillText(labels[type] || '', w - 4, h - 4);
+}
+
+/* ================================================================
+   MAIN RENDER LOOP
+   ================================================================ */
+
+let lastTime = 0;
+
+function render(timestamp) {
+  requestAnimationFrame(render);
+  const dt = lastTime ? (timestamp - lastTime) / 1000 : 0.016;
+  lastTime = timestamp;
+  simTime += dt;
+
+  // Animate simulated values
+  sim.motors[0] = 0.45 + Math.sin(simTime * 1.1) * 0.05;
+  sim.motors[1] = 0.50 + Math.sin(simTime * 1.3 + 1) * 0.05;
+  sim.motors[2] = 0.48 + Math.sin(simTime * 0.9 + 2) * 0.05;
+  sim.motors[3] = 0.52 + Math.sin(simTime * 1.2 + 3) * 0.05;
+  sim.breathe = Math.sin(simTime * 2) * 0.5 + 0.5;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Title
+  ctx.fillStyle = '#334';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('OpenKB Drone \u2014 Electrical Schematic & Signal Flow', W/2, 22);
+
+  // Draw order: wiring (back), components (front), annotations (top)
+  drawWiring();
+  drawESP32();
+  drawPeripherals();
+  drawAnnotations();
+
+  // Highlight hovered component
+  if (hoveredRegion) {
+    const r = hoveredRegion.rect;
+    ctx.strokeStyle = '#00d4ff';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    roundRect(r.x - 4, r.y - 4, r.w + 8, r.h + 8, 8, null, '#00d4ff', 2);
+    ctx.setLineDash([]);
+  }
+}
+
+requestAnimationFrame(render);
+
+})();
+</script>
+</body>
+</html>
